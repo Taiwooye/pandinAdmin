@@ -22,7 +22,8 @@ export type Room = {
   category: string;
   price: number;
   capacity: number;
-  available: boolean;
+  totalUnits: number;
+  availableUnits: number;
 };
 
 export type Apartment = {
@@ -31,7 +32,8 @@ export type Apartment = {
   type: string;
   price: number;
   bedrooms: number;
-  available: boolean;
+  totalUnits: number;
+  availableUnits: number;
 };
 
 export type MenuItem = {
@@ -80,18 +82,18 @@ export const mockBookings: Booking[] = [
 ];
 
 export const mockRooms: Room[] = [
-  { id: "nkrumah-basic-room", name: "Nkrumah Basic Room", category: "Standard", price: 23000, capacity: 2, available: true },
-  { id: "fela-standard-room", name: "Fela Standard Room", category: "Standard", price: 28000, capacity: 2, available: true },
-  { id: "zik-standard-plus-room", name: "Zik Standard Plus Room", category: "Deluxe", price: 33000, capacity: 3, available: true },
-  { id: "mandela-suite", name: "Mandela Suite", category: "Suite", price: 55000, capacity: 4, available: true },
+  { id: "nkrumah-basic-room", name: "Nkrumah Basic Room", category: "Standard", price: 23000, capacity: 2, totalUnits: 8, availableUnits: 5 },
+  { id: "fela-standard-room", name: "Fela Standard Room", category: "Standard", price: 28000, capacity: 2, totalUnits: 6, availableUnits: 4 },
+  { id: "zik-standard-plus-room", name: "Zik Standard Plus Room", category: "Deluxe", price: 33000, capacity: 3, totalUnits: 5, availableUnits: 3 },
+  { id: "mandela-suite", name: "Mandela Suite", category: "Suite", price: 55000, capacity: 4, totalUnits: 4, availableUnits: 2 },
 ];
 
 export const mockApartments: Apartment[] = [
-  { id: "one-bedroom-apartment", name: "One Bedroom Apartment", type: "1-Bedroom", price: 100000, bedrooms: 1, available: true },
-  { id: "two-bedroom-apartment-a", name: "Two Bedroom Apartment A", type: "2-Bedroom", price: 130000, bedrooms: 2, available: true },
-  { id: "two-bedroom-apartment-b", name: "Two Bedroom Apartment B", type: "2-Bedroom", price: 130000, bedrooms: 2, available: false },
-  { id: "three-bedroom-apartment", name: "Three Bedroom Apartment", type: "3-Bedroom", price: 160000, bedrooms: 3, available: true },
-  { id: "four-bedroom-apartment", name: "Four Bedroom Apartment", type: "4-Bedroom", price: 180000, bedrooms: 4, available: true },
+  { id: "one-bedroom-apartment", name: "One Bedroom Apartment", type: "1-Bedroom", price: 100000, bedrooms: 1, totalUnits: 2, availableUnits: 2 },
+  { id: "two-bedroom-apartment-a", name: "Two Bedroom Apartment A", type: "2-Bedroom", price: 130000, bedrooms: 2, totalUnits: 2, availableUnits: 1 },
+  { id: "two-bedroom-apartment-b", name: "Two Bedroom Apartment B", type: "2-Bedroom", price: 130000, bedrooms: 2, totalUnits: 1, availableUnits: 0 },
+  { id: "three-bedroom-apartment", name: "Three Bedroom Apartment", type: "3-Bedroom", price: 160000, bedrooms: 3, totalUnits: 1, availableUnits: 1 },
+  { id: "four-bedroom-apartment", name: "Four Bedroom Apartment", type: "4-Bedroom", price: 180000, bedrooms: 4, totalUnits: 1, availableUnits: 1 },
 ];
 
 export const mockLoungeMenu: MenuItem[] = [
