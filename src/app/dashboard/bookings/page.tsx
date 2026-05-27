@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 import { mockBookings, Booking, BookingStatus } from "@/lib/mockData";
@@ -37,7 +37,7 @@ export default function BookingsPage() {
         {(["all", "pending", "confirmed", "cancelled"] as const).map((f) => (
           <button key={f} onClick={() => setFilter(f)}
             className={`px-4 py-1.5 rounded-full text-sm font-medium capitalize transition-colors ${
-              filter === f ? "bg-[#C41230] text-white" : "bg-white border border-slate-200 text-slate-600 hover:border-slate-300"
+              filter === f ? "bg-[#5A0E24] text-white" : "bg-white border border-slate-200 text-slate-600 hover:border-slate-300"
             }`}>
             {f}
           </button>

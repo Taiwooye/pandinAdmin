@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -18,11 +18,11 @@ export default function Sidebar() {
   const { logout } = useAuth();
 
   return (
-    <aside className="w-60 min-h-screen bg-slate-900 flex flex-col fixed left-0 top-0 bottom-0 z-40">
+    <aside className="w-60 min-h-screen bg-[#494B67] flex flex-col fixed left-0 top-0 bottom-0 z-40">
       {/* Logo */}
       <div className="px-6 py-5 border-b border-slate-800">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-[#C41230] flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-lg bg-[#5A0E24] flex items-center justify-center shrink-0">
             <svg viewBox="0 0 24 24" fill="none" className="w-4 h-4 text-white" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 21V7a2 2 0 012-2h14a2 2 0 012 2v14M9 21V12h6v9M3 10h18" />
             </svg>
@@ -43,7 +43,7 @@ export default function Sidebar() {
               key={link.href}
               href={link.href}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                active ? "bg-[#C41230] text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"
+                active ? "bg-[#5A0E24] text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"
               }`}
             >
               <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">

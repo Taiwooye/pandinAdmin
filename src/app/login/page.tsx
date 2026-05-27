@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 
@@ -9,14 +9,18 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
+  const { login, isAuthenticated } = useAuth();
   const router = useRouter();
+
+  useEffect(() => {
+    if (isAuthenticated) router.replace("/dashboard");
+  }, [isAuthenticated, router]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 600));
+    await new Promise((r) => setTimeout(r, 400));
     const ok = login(email, password);
     if (ok) {
       router.push("/dashboard");
@@ -27,9 +31,9 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex bg-slate-900">
+    <div className="min-h-screen flex bg-[#494B67]">
       {/* Left panel */}
-      <div className="hidden lg:flex w-1/2 flex-col justify-between p-12 bg-[#C41230]">
+      <div className="hidden lg:flex w-1/2 flex-col justify-between p-12 bg-[#5A0E24]">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center">
             <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6 text-white" stroke="currentColor" strokeWidth={2}>
@@ -51,7 +55,7 @@ export default function LoginPage() {
       <div className="flex-1 flex items-center justify-center p-8">
         <div className="w-full max-w-sm">
           <div className="mb-8 lg:hidden flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl bg-[#C41230] flex items-center justify-center">
+            <div className="w-9 h-9 rounded-xl bg-[#5A0E24] flex items-center justify-center">
               <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 21V7a2 2 0 012-2h14a2 2 0 012 2v14M9 21V12h6v9M3 10h18" />
               </svg>
@@ -60,7 +64,7 @@ export default function LoginPage() {
           </div>
 
           <h2 className="text-2xl font-bold text-white mb-1">Sign in</h2>
-          <p className="text-slate-400 text-sm mb-8">Enter your admin credentials to continue.</p>
+          <p className="text-slate-300 text-sm mb-8">Enter your admin credentials to continue.</p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -70,7 +74,7 @@ export default function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[#C41230] focus:border-transparent"
+                className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[#5A0E24] focus:border-transparent"
                 placeholder="admin@pandingroup.com"
               />
             </div>
@@ -81,7 +85,7 @@ export default function LoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[#C41230] focus:border-transparent"
+                className="w-full px-4 py-3 bg-slate-800 border border-slate-700 rounded-xl text-white text-sm placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[#5A0E24] focus:border-transparent"
                 placeholder="••••••••"
               />
             </div>
@@ -93,13 +97,13 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full py-3 bg-[#C41230] text-white font-semibold rounded-xl hover:bg-[#9C0E25] transition-colors disabled:opacity-60 text-sm"
+              className="w-full py-3 bg-[#5A0E24] text-white font-semibold rounded-xl hover:bg-[#921224] transition-colors disabled:opacity-60 text-sm"
             >
-              {loading ? "Signing in…" : "Sign In"}
+              {loading ? "Signing in..." : "Sign In"}
             </button>
           </form>
 
-          <p className="text-center text-slate-600 text-xs mt-8">
+          <p className="text-center text-slate-500 text-xs mt-8">
             For access, contact the PaNDiN system administrator.
           </p>
         </div>

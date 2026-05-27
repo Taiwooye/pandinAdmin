@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 import { mockLoungeMenu, MenuItem } from "@/lib/mockData";
@@ -45,7 +45,7 @@ export default function LoungePage() {
         {categories.map((cat) => (
           <div key={cat}>
             <div className="px-6 py-3 bg-slate-50 border-b border-slate-100">
-              <h3 className="text-xs font-bold uppercase tracking-widest text-[#C41230]">{cat}</h3>
+              <h3 className="text-xs font-bold uppercase tracking-widest text-[#5A0E24]">{cat}</h3>
             </div>
             <div className="divide-y divide-slate-50">
               {menu.filter((m) => m.category === cat).map((item) => (
@@ -86,7 +86,7 @@ export default function LoungePage() {
                 className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
             </div>
             <div className="flex gap-2 pt-1">
-              <button onClick={saveEdit} className="flex-1 py-2.5 bg-[#C41230] text-white font-semibold rounded-xl text-sm hover:bg-[#9C0E25]">Save</button>
+              <button onClick={saveEdit} className="flex-1 py-2.5 bg-[#5A0E24] text-white font-semibold rounded-xl text-sm hover:bg-[#921224]">Save</button>
               <button onClick={() => setEditing(null)} className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold rounded-xl text-sm hover:bg-slate-200">Cancel</button>
             </div>
           </div>

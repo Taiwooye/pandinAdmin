@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 
@@ -48,7 +48,7 @@ export default function GalleryPage() {
           <input value={newCaption} onChange={(e) => setNewCaption(e.target.value)} placeholder="Caption (optional)"
             className="w-48 px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400" />
           <button onClick={addPhoto}
-            className="px-5 py-2.5 bg-[#C41230] text-white text-sm font-semibold rounded-xl hover:bg-[#9C0E25] transition-colors shrink-0">
+            className="px-5 py-2.5 bg-[#5A0E24] text-white text-sm font-semibold rounded-xl hover:bg-[#921224] transition-colors shrink-0">
             Add Photo
           </button>
         </div>
@@ -70,7 +70,7 @@ export default function GalleryPage() {
             </div>
             <button onClick={() => removePhoto(item.id)}
               className="absolute top-2 right-2 w-7 h-7 bg-red-500 text-white rounded-full text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center hover:bg-red-600">
-              ×
+              Ã—
             </button>
           </div>
         ))}

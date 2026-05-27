@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { mockBookings, mockRooms, mockApartments } from "@/lib/mockData";
 
@@ -45,7 +45,7 @@ export default function DashboardPage() {
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm">
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-semibold text-slate-800">Recent Bookings</h2>
-          <a href="/dashboard/bookings" className="text-xs text-[#C41230] font-semibold hover:underline">View all →</a>
+          <a href="/dashboard/bookings" className="text-xs text-[#5A0E24] font-semibold hover:underline">View all â†’</a>
         </div>
         <div className="divide-y divide-slate-50">
           {mockBookings.slice(0, 5).map((b) => (

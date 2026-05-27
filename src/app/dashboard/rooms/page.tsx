@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from "react";
 import { mockRooms, Room } from "@/lib/mockData";
@@ -71,7 +71,7 @@ export default function RoomsPage() {
       {editing && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditing(null)}>
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
-            <h3 className="font-bold text-slate-800 mb-4">Edit Price — {editing.name}</h3>
+            <h3 className="font-bold text-slate-800 mb-4">Edit Price â€” {editing.name}</h3>
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Price per night (₦)</label>
             <input
               type="number"
@@ -80,7 +80,7 @@ export default function RoomsPage() {
               className="w-full px-4 py-3 border border-slate-200 rounded-xl text-slate-800 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 mb-4"
             />
             <div className="flex gap-2">
-              <button onClick={savePrice} className="flex-1 py-2.5 bg-[#C41230] text-white font-semibold rounded-xl hover:bg-[#9C0E25] text-sm">Save</button>
+              <button onClick={savePrice} className="flex-1 py-2.5 bg-[#5A0E24] text-white font-semibold rounded-xl hover:bg-[#921224] text-sm">Save</button>
               <button onClick={() => setEditing(null)} className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold rounded-xl hover:bg-slate-200 text-sm">Cancel</button>
             </div>
           </div>
