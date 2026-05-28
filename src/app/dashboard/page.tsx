@@ -4,8 +4,8 @@ import { mockBookings, mockRooms, mockApartments } from "@/lib/mockData";
 
 const pendingBookings = mockBookings.filter((b) => b.status === "pending");
 const confirmedBookings = mockBookings.filter((b) => b.status === "confirmed");
-const availableRooms = mockRooms.filter((r) => r.available).length;
-const availableApts = mockApartments.filter((a) => a.available).length;
+const availableRooms = mockRooms.filter((r) => r.availableUnits > 0).length;
+const availableApts = mockApartments.filter((a) => a.availableUnits > 0).length;
 
 const stats = [
   { label: "Pending Bookings", value: pendingBookings.length, color: "bg-amber-50 text-amber-700 border-amber-100", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
