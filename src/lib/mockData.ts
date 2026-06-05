@@ -20,10 +20,13 @@ export type Room = {
   id: string;
   name: string;
   category: string;
+  roomTypeDesc: string;
   price: number;
   capacity: number;
   totalUnits: number;
   availableUnits: number;
+  roomNumbers: string[];
+  facilities: string[];
 };
 
 export type Apartment = {
@@ -82,10 +85,48 @@ export const mockBookings: Booking[] = [
 ];
 
 export const mockRooms: Room[] = [
-  { id: "nkrumah-basic-room", name: "Nkrumah Basic Room", category: "Standard", price: 23000, capacity: 2, totalUnits: 8, availableUnits: 5 },
-  { id: "fela-standard-room", name: "Fela Standard Room", category: "Standard", price: 28000, capacity: 2, totalUnits: 6, availableUnits: 4 },
-  { id: "zik-standard-plus-room", name: "Zik Standard Plus Room", category: "Deluxe", price: 33000, capacity: 3, totalUnits: 5, availableUnits: 3 },
-  { id: "mandela-suite", name: "Mandela Suite", category: "Suite", price: 55000, capacity: 4, totalUnits: 4, availableUnits: 2 },
+  {
+    id: "nkrumah", name: "Nkrumah", category: "Basic",
+    roomTypeDesc: "Single Sized bed for 2",
+    price: 28000, capacity: 2, totalUnits: 7, availableUnits: 7,
+    roomNumbers: ["203", "205", "207", "303", "305", "307", "106"],
+    facilities: ["24/7 Electricity Supply", "24/7 AC", "Smart TV"],
+  },
+  {
+    id: "fela", name: "Fela", category: "Standard",
+    roomTypeDesc: "Single Sized bed for 2",
+    price: 33000, capacity: 2, totalUnits: 8, availableUnits: 8,
+    roomNumbers: ["201", "208", "204", "301", "308", "101", "107", "108"],
+    facilities: ["24/7 Electricity Supply", "24/7 AC", "Smart TV", "Water Heating System"],
+  },
+  {
+    id: "zik", name: "Zik", category: "Standard Plus",
+    roomTypeDesc: "1 Queen Sized bed for up to 3 persons",
+    price: 38000, capacity: 3, totalUnits: 5, availableUnits: 5,
+    roomNumbers: ["202", "206", "302", "304", "306"],
+    facilities: ["24/7 Electricity Supply", "24/7 AC", "Smart TV", "Water Heating System", "Fridge"],
+  },
+  {
+    id: "sankara", name: "Sankara", category: "Deluxe",
+    roomTypeDesc: "Single sized bed for 2 persons",
+    price: 45000, capacity: 2, totalUnits: 4, availableUnits: 4,
+    roomNumbers: ["404", "405", "406", "407"],
+    facilities: ["24/7 Electricity Supply", "24/7 AC", "Smart TV", "Water Heating System", "Premium Lightings", "Fridge"],
+  },
+  {
+    id: "awo", name: "Awo", category: "Deluxe Suite",
+    roomTypeDesc: "1 King sized bed for 3 persons",
+    price: 60000, capacity: 3, totalUnits: 3, availableUnits: 3,
+    roomNumbers: ["401S", "402S", "403S"],
+    facilities: ["24/7 Electricity Supply", "24/7 AC", "Smart TV", "Water Heating System", "Premium Lightings", "Fridge", "Mini Couch / Relaxation area"],
+  },
+  {
+    id: "mandela", name: "Mandela", category: "Executive Suite",
+    roomTypeDesc: "1 King sized bed and 1 Queen sized bed",
+    price: 60000, capacity: 4, totalUnits: 3, availableUnits: 3,
+    roomNumbers: ["109", "209", "309"],
+    facilities: ["24/7 Electricity Supply", "24/7 AC", "Smart TV", "Water Heating System", "Fridge"],
+  },
 ];
 
 export const mockApartments: Apartment[] = [
