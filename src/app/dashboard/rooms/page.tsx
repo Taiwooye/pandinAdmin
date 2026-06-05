@@ -21,7 +21,8 @@ export default function RoomsPage() {
       r.category.toLowerCase().includes(q) ||
       r.roomTypeDesc.toLowerCase().includes(q) ||
       r.roomNumbers.some((n) => n.toLowerCase().includes(q)) ||
-      r.facilities.some((f) => f.toLowerCase().includes(q))
+      r.facilities.some((f) => f.toLowerCase().includes(q)) ||
+      String(r.price).includes(q.replace(/[₦,\s]/g, ""))
     );
   }, [rooms, search]);
 
