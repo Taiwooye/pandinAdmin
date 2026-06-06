@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { mockRooms, Room } from "@/lib/mockData";
 
 export default function RoomsPage() {
@@ -73,6 +74,16 @@ export default function RoomsPage() {
           <h1 className="text-2xl font-bold text-slate-800">Hotel Rooms</h1>
           <p className="text-slate-500 text-sm mt-1">Manage rates, availability, room numbers, and facilities.</p>
         </div>
+        <div className="flex items-center gap-3">
+        <Link
+          href="/dashboard/rooms/new"
+          className="flex items-center gap-2 px-4 py-2.5 bg-[#5A0E24] text-white text-sm font-semibold rounded-xl hover:bg-[#921224] transition-colors shrink-0"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          Add Room
+        </Link>
         <div className="relative">
           <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -83,6 +94,7 @@ export default function RoomsPage() {
             placeholder="Search name, room no., facility…"
             className="pl-9 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 w-full sm:w-72"
           />
+        </div>
         </div>
       </div>
 
