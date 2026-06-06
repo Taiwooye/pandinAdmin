@@ -7,8 +7,8 @@ import EarningsChart from "@/components/EarningsChart";
 
 // ── Derived stats ─────────────────────────────────────────────────────────────
 
-const pendingBookings = mockBookings.filter((b) => b.status === "pending");
-const confirmedBookings = mockBookings.filter((b) => b.status === "confirmed");
+const totalBookings = mockBookings.length;
+const verifiedBookings = mockBookings.filter((b) => b.status === "confirmed").length;
 const availableRooms = mockRooms.filter((r) => r.availableUnits > 0).length;
 const availableApts = mockApartments.filter((a) => a.availableUnits > 0).length;
 
@@ -64,16 +64,16 @@ const upcomingCheckIns = mockBookings
 
 // Stats cards
 const stats = [
-  { label: "Pending", value: pendingBookings.length, color: "bg-amber-50 text-amber-700 border-amber-100", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
-  { label: "Confirmed", value: confirmedBookings.length, color: "bg-green-50 text-green-700 border-green-100", icon: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" },
+  { label: "Total Bookings", value: totalBookings, color: "bg-slate-50 text-slate-700 border-slate-100", icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" },
+  { label: "Payment Verified", value: verifiedBookings, color: "bg-green-50 text-green-700 border-green-100", icon: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" },
   { label: "Rooms Free", value: `${availableRooms}/${mockRooms.length}`, color: "bg-blue-50 text-blue-700 border-blue-100", icon: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5" },
   { label: "Apts Free", value: `${availableApts}/${mockApartments.length}`, color: "bg-purple-50 text-purple-700 border-purple-100", icon: "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" },
 ];
 
-const statusBadge: Record<string, string> = {
-  pending: "bg-amber-100 text-amber-700",
+const paymentBadge: Record<string, string> = {
   confirmed: "bg-green-100 text-green-700",
-  cancelled: "bg-red-100 text-red-700",
+  pending: "bg-amber-100 text-amber-700",
+  cancelled: "bg-slate-100 text-slate-500",
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -157,7 +157,7 @@ export default function DashboardPage() {
           <div className="grid grid-cols-3 gap-3 mb-5">
             {[
               { label: "Add Room", href: "/dashboard/rooms/new", icon: "M12 4v16m8-8H4", cls: "text-[#5A0E24] bg-[#5A0E24]/5 hover:bg-[#5A0E24]/10 border-[#5A0E24]/10" },
-              { label: "View Pending", href: "/dashboard/bookings", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z", cls: "text-amber-700 bg-amber-50 hover:bg-amber-100 border-amber-100" },
+              { label: "Manage Rooms", href: "/dashboard/rooms", icon: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5", cls: "text-amber-700 bg-amber-50 hover:bg-amber-100 border-amber-100" },
               { label: "All Bookings", href: "/dashboard/bookings", icon: "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2", cls: "text-blue-700 bg-blue-50 hover:bg-blue-100 border-blue-100" },
             ].map((a) => (
               <Link key={a.label} href={a.href} className={`flex items-center gap-2.5 px-4 py-3 rounded-xl border text-sm font-semibold transition-colors ${a.cls}`}>
@@ -300,8 +300,8 @@ export default function DashboardPage() {
                     {b.ref && <span className="ml-1 font-mono">· {b.ref}</span>}
                   </p>
                 </div>
-                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold capitalize shrink-0 ${statusBadge[b.status]}`}>
-                  {b.status}
+                <span className={`px-2.5 py-1 rounded-full text-xs font-semibold shrink-0 ${paymentBadge[b.status]}`}>
+                  {b.status === "confirmed" ? "Verified" : b.status === "cancelled" ? "Cancelled" : "Awaiting"}
                 </span>
               </div>
             ))
