@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-type AdminRole = "Super Admin" | "Manager" | "Receptionist" | "View Only";
+type AdminRole = "Manager" | "Receptionist";
 type AdminStatus = "active" | "pending";
 
 interface AdminUser {
@@ -14,28 +14,95 @@ interface AdminUser {
   joinedAt: string;
 }
 
+type PermissionKey =
+  | "view_bookings"
+  | "manage_bookings"
+  | "verify_payments"
+  | "view_earnings"
+  | "manage_rooms"
+  | "manage_apartments"
+  | "manage_lounge_menu"
+  | "invite_admins";
+
+interface Permission {
+  key: PermissionKey;
+  label: string;
+  desc: string;
+}
+
+type RolePermissions = Record<PermissionKey, boolean>;
+
+const PERMISSIONS: Permission[] = [
+  { key: "view_bookings",      label: "View Bookings",       desc: "See all booking records and guest details" },
+  { key: "manage_bookings",    label: "Manage Bookings",     desc: "Update booking info and check-in/out dates" },
+  { key: "verify_payments",    label: "Verify Payments",     desc: "Toggle payment verified status on bookings" },
+  { key: "view_earnings",      label: "View Earnings",       desc: "Access revenue reports and earnings overview" },
+  { key: "manage_rooms",       label: "Manage Rooms",        desc: "Edit room prices, availability, and details" },
+  { key: "manage_apartments",  label: "Manage Apartments",   desc: "Edit apartment availability and pricing" },
+  { key: "manage_lounge_menu", label: "Manage Lounge Menu",  desc: "Add, edit, or remove lounge menu items" },
+  { key: "invite_admins",      label: "Invite Admins",       desc: "Invite new team members to the portal" },
+];
+
+const DEFAULT_PERMISSIONS: Record<"Manager" | "Receptionist", RolePermissions> = {
+  Manager: {
+    view_bookings:      true,
+    manage_bookings:    true,
+    verify_payments:    true,
+    view_earnings:      true,
+    manage_rooms:       true,
+    manage_apartments:  true,
+    manage_lounge_menu: true,
+    invite_admins:      true,
+  },
+  Receptionist: {
+    view_bookings:      true,
+    manage_bookings:    true,
+    verify_payments:    false,
+    view_earnings:      false,
+    manage_rooms:       false,
+    manage_apartments:  false,
+    manage_lounge_menu: false,
+    invite_admins:      false,
+  },
+};
+
 const ROLES: { value: AdminRole; desc: string }[] = [
-  { value: "Super Admin", desc: "Full access — manage everything including other admins" },
-  { value: "Manager", desc: "Manage bookings, rooms, apartments, and menu" },
+  { value: "Manager",      desc: "Full access — manage everything including bookings, rooms, menu, and other admins" },
   { value: "Receptionist", desc: "View and update bookings only" },
-  { value: "View Only", desc: "Read-only access to all sections" },
 ];
 
 const ROLE_COLORS: Record<AdminRole, string> = {
-  "Super Admin": "bg-[#5A0E24]/10 text-[#5A0E24]",
-  Manager: "bg-blue-50 text-blue-700",
-  Receptionist: "bg-amber-50 text-amber-700",
-  "View Only": "bg-slate-100 text-slate-500",
+  Manager:        "bg-[#5A0E24]/10 text-[#5A0E24]",
+  Receptionist:   "bg-amber-50 text-amber-700",
 };
+
+// Simulated current logged-in user role
+const CURRENT_USER_ROLE: AdminRole = "Manager";
 
 const INITIAL_ADMINS: AdminUser[] = [
   {
     id: "a1",
-    name: "Taiwo Oyedokun",
-    email: "oyedokuntaiwo96@gmail.com",
-    role: "Super Admin",
+    name: "Adaeze Nwosu",
+    email: "adaeze.nwosu@pandinhotels.com",
+    role: "Manager",
     status: "active",
     joinedAt: "2026-01-01",
+  },
+  {
+    id: "a2",
+    name: "Emeka Okafor",
+    email: "emeka.okafor@pandinhotels.com",
+    role: "Receptionist",
+    status: "active",
+    joinedAt: "2026-02-14",
+  },
+  {
+    id: "a3",
+    name: "Funmilayo Adeyemi",
+    email: "funmi.adeyemi@pandinhotels.com",
+    role: "Receptionist",
+    status: "active",
+    joinedAt: "2026-03-05",
   },
 ];
 
@@ -46,13 +113,17 @@ export default function AdminsPage() {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<AdminRole>("Receptionist");
   const [sent, setSent] = useState<string | null>(null);
-
-  // Edit role
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editRole, setEditRole] = useState<AdminRole>("Receptionist");
 
+  // Permissions state — Manager and Receptionist only
+  const [permissions, setPermissions] = useState<Record<"Manager" | "Receptionist", RolePermissions>>(DEFAULT_PERMISSIONS);
+  const [permSaved, setPermSaved] = useState(false);
+
   const activeAdmins = admins.filter((a) => a.status === "active");
   const pendingAdmins = admins.filter((a) => a.status === "pending");
+
+  const canManagePermissions = CURRENT_USER_ROLE === "Manager";
 
   function sendInvite() {
     if (!name.trim() || !email.trim()) return;
@@ -84,13 +155,26 @@ export default function AdminsPage() {
     setTimeout(() => setSent(null), 3000);
   }
 
+  function togglePermission(role: "Manager" | "Receptionist", key: PermissionKey) {
+    setPermissions((prev) => ({
+      ...prev,
+      [role]: { ...prev[role], [key]: !prev[role][key] },
+    }));
+    setPermSaved(false);
+  }
+
+  function savePermissions() {
+    setPermSaved(true);
+    setTimeout(() => setPermSaved(false), 3000);
+  }
+
   return (
     <div>
       {/* Header */}
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Admin Team</h1>
-          <p className="text-slate-500 text-sm mt-1">Manage who has access to this admin portal.</p>
+          <p className="text-slate-500 text-sm mt-1">Manage who has access to this admin portal and what they can do.</p>
         </div>
         <button
           onClick={() => { setShowInvite(true); setSent(null); }}
@@ -119,7 +203,7 @@ export default function AdminsPage() {
       )}
 
       {/* Role legend */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
         {ROLES.map((r) => (
           <div key={r.value} className="bg-white rounded-xl border border-slate-100 p-4">
             <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-bold mb-2 ${ROLE_COLORS[r.value]}`}>{r.value}</span>
@@ -163,7 +247,7 @@ export default function AdminsPage() {
               ) : (
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${ROLE_COLORS[admin.role]}`}>{admin.role}</span>
-                  {admin.role !== "Super Admin" && (
+                  {admin.id !== "a1" && (
                     <>
                       <button
                         onClick={() => { setEditingId(admin.id); setEditRole(admin.role); }}
@@ -188,7 +272,7 @@ export default function AdminsPage() {
 
       {/* Pending invitations */}
       {pendingAdmins.length > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-5">
           <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-amber-400" />
             <h2 className="font-semibold text-slate-800 text-sm">Pending Invitations</h2>
@@ -209,24 +293,121 @@ export default function AdminsPage() {
                 <div className="flex items-center gap-2 shrink-0">
                   <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${ROLE_COLORS[admin.role]}`}>{admin.role}</span>
                   <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-600">Awaiting</span>
-                  <button
-                    onClick={() => resendInvite(admin.email)}
-                    className="px-3 py-1.5 text-xs font-semibold bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
-                  >
-                    Resend
-                  </button>
-                  <button
-                    onClick={() => removeAdmin(admin.id)}
-                    className="px-3 py-1.5 text-xs font-semibold bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
-                  >
-                    Cancel
-                  </button>
+                  <button onClick={() => resendInvite(admin.email)} className="px-3 py-1.5 text-xs font-semibold bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 transition-colors">Resend</button>
+                  <button onClick={() => removeAdmin(admin.id)} className="px-3 py-1.5 text-xs font-semibold bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors">Cancel</button>
                 </div>
               </div>
             ))}
           </div>
         </div>
       )}
+
+      {/* ── Permission Settings ─────────────────────────────────────── */}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center">
+              <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="font-semibold text-slate-800 text-sm">Permission Settings</h2>
+              <p className="text-xs text-slate-400 mt-0.5">Control what each role can do across the portal</p>
+            </div>
+          </div>
+          <span className="px-2.5 py-1 bg-blue-50 text-blue-700 text-xs font-bold rounded-full">Manager Access</span>
+        </div>
+
+        {canManagePermissions ? (
+          <div className="p-6">
+            {/* Saved toast */}
+            {permSaved && (
+              <div className="mb-5 flex items-center gap-2 bg-green-50 border border-green-100 text-green-700 px-4 py-3 rounded-xl text-sm">
+                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Permissions saved successfully.
+              </div>
+            )}
+
+            {/* Column headers */}
+            <div className="grid grid-cols-[1fr_120px_120px] gap-4 mb-3 px-2">
+              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Permission</div>
+              <div className="text-xs font-semibold text-blue-600 uppercase tracking-wider text-center">Manager</div>
+              <div className="text-xs font-semibold text-amber-600 uppercase tracking-wider text-center">Receptionist</div>
+            </div>
+
+            {/* Permission rows */}
+            <div className="divide-y divide-slate-50 rounded-xl border border-slate-100 overflow-hidden">
+              {PERMISSIONS.map((p) => (
+                <div key={p.key} className="grid grid-cols-[1fr_120px_120px] gap-4 items-center px-4 py-3.5 bg-white hover:bg-slate-50 transition-colors">
+                  <div>
+                    <p className="text-sm font-medium text-slate-700">{p.label}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">{p.desc}</p>
+                  </div>
+
+                  {/* Manager toggle */}
+                  <div className="flex justify-center">
+                    <button
+                      onClick={() => togglePermission("Manager", p.key)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                        permissions.Manager[p.key] ? "bg-blue-600" : "bg-slate-200"
+                      }`}
+                      role="switch"
+                      aria-checked={permissions.Manager[p.key]}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${permissions.Manager[p.key] ? "translate-x-6" : "translate-x-1"}`} />
+                    </button>
+                  </div>
+
+                  {/* Receptionist toggle */}
+                  <div className="flex justify-center">
+                    <button
+                      onClick={() => togglePermission("Receptionist", p.key)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                        permissions.Receptionist[p.key] ? "bg-amber-500" : "bg-slate-200"
+                      }`}
+                      role="switch"
+                      aria-checked={permissions.Receptionist[p.key]}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${permissions.Receptionist[p.key] ? "translate-x-6" : "translate-x-1"}`} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Super Admin note */}
+            <p className="text-xs text-slate-400 mt-4 flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Changes apply to all users with that role across the portal.
+            </p>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                onClick={savePermissions}
+                className="px-5 py-2.5 bg-[#5A0E24] text-white text-sm font-semibold rounded-xl hover:bg-[#921224] transition-colors"
+              >
+                Save Permissions
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Locked state for Receptionist */
+          <div className="px-6 py-12 text-center">
+            <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
+              <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            <p className="text-sm font-semibold text-slate-600">Access Restricted</p>
+            <p className="text-xs text-slate-400 mt-1">Only Managers and above can view or change permission settings.</p>
+          </div>
+        )}
+      </div>
 
       {/* Invite modal */}
       {showInvite && (
@@ -262,7 +443,7 @@ export default function AdminsPage() {
             <div>
               <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-2">Role *</label>
               <div className="space-y-2">
-                {ROLES.filter((r) => r.value !== "Super Admin").map((r) => (
+                {ROLES.map((r) => (
                   <button
                     key={r.value}
                     type="button"
