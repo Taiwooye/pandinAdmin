@@ -1,9 +1,13 @@
 import { apiClient } from "../apiClient";
 
-// TODO: confirm with backend — path inferred from "Site Stats" in the Admin API collection
-const BASE_PATH = "/api/v1/admin/site-stats";
+const BASE_PATH = "/api/v1/admin/stats";
 
-export async function getOverview(params?: Record<string, unknown>) {
+export async function list(params?: Record<string, unknown>) {
   const { data } = await apiClient.get(BASE_PATH, { params });
+  return data;
+}
+
+export async function update(id: string, payload: unknown) {
+  const { data } = await apiClient.put(`${BASE_PATH}/${id}`, payload);
   return data;
 }

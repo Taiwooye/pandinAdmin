@@ -41,3 +41,11 @@ export function useDeleteTestimonial() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: TESTIMONIALS_KEY }),
   });
 }
+
+export function useReorderTestimonials() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: testimonialsApi.reorder,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: TESTIMONIALS_KEY }),
+  });
+}

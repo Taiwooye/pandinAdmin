@@ -41,3 +41,27 @@ export function useDeleteVenue() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: VENUES_KEY }),
   });
 }
+
+export function useUploadVenueMedia() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, formData }: { id: string; formData: FormData }) => venuesApi.uploadMedia(id, formData),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: VENUES_KEY }),
+  });
+}
+
+export function useDeleteVenueMedia() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, mediaId }: { id: string; mediaId: string }) => venuesApi.deleteMedia(id, mediaId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: VENUES_KEY }),
+  });
+}
+
+export function useReorderVenues() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: venuesApi.reorder,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: VENUES_KEY }),
+  });
+}

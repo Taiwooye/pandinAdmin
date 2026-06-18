@@ -1,6 +1,5 @@
 import { apiClient } from "../apiClient";
 
-// TODO: confirm with backend — path inferred from "Recreation" in the Admin API collection
 const BASE_PATH = "/api/v1/admin/recreation";
 
 export async function list(params?: Record<string, unknown>) {
@@ -19,11 +18,11 @@ export async function create(payload: unknown) {
 }
 
 export async function update(id: string, payload: unknown) {
-  const { data } = await apiClient.patch(`${BASE_PATH}/${id}`, payload);
+  const { data } = await apiClient.put(`${BASE_PATH}/${id}`, payload);
   return data;
 }
 
-export async function remove(id: string) {
-  const { data } = await apiClient.delete(`${BASE_PATH}/${id}`);
+export async function reorder(items: { id: number; sort_order: number }[]) {
+  const { data } = await apiClient.patch(`${BASE_PATH}/reorder`, { items });
   return data;
 }

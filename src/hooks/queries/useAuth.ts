@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as authApi from "@/services/endpoints/auth";
 
 export function useLogin() {
@@ -14,12 +14,5 @@ export function useLogout() {
   return useMutation({
     mutationFn: authApi.logout,
     onSuccess: () => queryClient.clear(),
-  });
-}
-
-export function useMe() {
-  return useQuery({
-    queryKey: ["me"],
-    queryFn: authApi.getMe,
   });
 }

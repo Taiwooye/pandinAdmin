@@ -10,18 +10,10 @@ export function useTeamMemberList(params?: Record<string, unknown>) {
   });
 }
 
-export function useTeamMember(id: string) {
-  return useQuery({
-    queryKey: [...TEAMMANAGEMENT_KEY, id],
-    queryFn: () => teamManagementApi.getById(id),
-    enabled: !!id,
-  });
-}
-
-export function useCreateTeamMember() {
+export function useInviteTeamMember() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: teamManagementApi.create,
+    mutationFn: teamManagementApi.invite,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: TEAMMANAGEMENT_KEY }),
   });
 }

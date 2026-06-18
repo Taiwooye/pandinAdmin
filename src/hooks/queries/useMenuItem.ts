@@ -1,43 +1,37 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import * as barsMenuApi from "@/services/endpoints/barsMenu";
+import * as barsApi from "@/services/endpoints/barsMenu";
 
-const BARSMENU_KEY = ["barsMenu"];
+const MENU_KEY = ["menuItems"];
 
-export function useMenuItemList(params?: Record<string, unknown>) {
+export function useMenuItemList(barId: string) {
   return useQuery({
-    queryKey: [...BARSMENU_KEY, params],
-    queryFn: () => barsMenuApi.list(params),
+    queryKey: [...MENU_KEY, barId],
+    queryFn: () => barsApi.listMenuItems(barId),
+    enabled: !!barId,
   });
 }
 
-export function useMenuItem(id: string) {
-  return useQuery({
-    queryKey: [...BARSMENU_KEY, id],
-    queryFn: () => barsMenuApi.getById(id),
-    enabled: !!id,
-  });
-}
-
-export function useCreateMenuItem() {
+export function useAddMenuItem() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: barsMenuApi.create,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: BARSMENU_KEY }),
+    mutationFn: ({ barId, payload }: { barId: string; payload: unknown }) => barsApi.addMenuItem(barId, payload),
+    onSuccess: (_data, variables) => queryClient.invalidateQueries({ queryKey: [...MENU_KEY, variables.barId] }),
   });
 }
 
 export function useUpdateMenuItem() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, payload }: { id: string; payload: unknown }) => barsMenuApi.update(id, payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: BARSMENU_KEY }),
+    mutationFn: ({ barId, itemId, payload }: { barId: string; itemId: string; payload: unknown }) =>
+      barsApi.updateMenuItem(barId, itemId, payload),
+    onSuccess: (_data, variables) => queryClient.invalidateQueries({ queryKey: [...MENU_KEY, variables.barId] }),
   });
 }
 
 export function useDeleteMenuItem() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: barsMenuApi.remove,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: BARSMENU_KEY }),
+    mutationFn: ({ barId, itemId }: { barId: string; itemId: string }) => barsApi.deleteMenuItem(barId, itemId),
+    onSuccess: (_data, variables) => queryClient.invalidateQueries({ queryKey: [...MENU_KEY, variables.barId] }),
   });
 }

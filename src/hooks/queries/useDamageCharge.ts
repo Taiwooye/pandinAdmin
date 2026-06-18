@@ -41,3 +41,11 @@ export function useDeleteDamageCharge() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: DAMAGECHARGES_KEY }),
   });
 }
+
+export function useReorderDamageCharges() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: damageChargesApi.reorder,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: DAMAGECHARGES_KEY }),
+  });
+}

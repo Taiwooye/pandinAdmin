@@ -2,46 +2,45 @@
 
 import { createContext, useContext, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-
-// TODO: Set BYPASS_AUTH = false and connect login() to real API when endpoint is ready
-const BYPASS_AUTH = true;
-
-const SESSION_KEY = "pandin_admin_session";
+import * as authApi from "@/services/endpoints/auth";
+import { TOKEN_KEY } from "@/services/apiClient";
 
 type AuthContextType = {
   isAuthenticated: boolean;
-  login: (email: string, password: string) => boolean;
+  login: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [isAuthenticated, setIsAuthenticated] = useState(BYPASS_AUTH);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
-    if (BYPASS_AUTH) {
-      setIsAuthenticated(true);
-      return;
-    }
-    const session = localStorage.getItem(SESSION_KEY);
-    if (session === "true") setIsAuthenticated(true);
+    if (localStorage.getItem(TOKEN_KEY)) setIsAuthenticated(true);
   }, []);
 
-  function login(email: string, password: string): boolean {
-    if (BYPASS_AUTH) {
+  async function login(email: string, password: string) {
+    try {
+      const res = await authApi.login({ email, password });
+      const token = res?.data?.token;
+      if (!token) return false;
+      localStorage.setItem(TOKEN_KEY, token);
       setIsAuthenticated(true);
       return true;
+    } catch {
+      return false;
     }
-    // TODO: replace with real API call
-    // const res = await fetch("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
-    // if (res.ok) { localStorage.setItem(SESSION_KEY, "true"); setIsAuthenticated(true); return true; }
-    return false;
   }
 
-  function logout() {
-    if (!BYPASS_AUTH) localStorage.removeItem(SESSION_KEY);
+  async function logout() {
+    try {
+      await authApi.logout();
+    } catch {
+      // best-effort — clear local session regardless of network result
+    }
+    localStorage.removeItem(TOKEN_KEY);
     setIsAuthenticated(false);
     router.push("/login");
   }

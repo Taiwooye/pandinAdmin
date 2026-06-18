@@ -10,18 +10,10 @@ export function useGalleryItemList(params?: Record<string, unknown>) {
   });
 }
 
-export function useGalleryItem(id: string) {
-  return useQuery({
-    queryKey: [...GALLERY_KEY, id],
-    queryFn: () => galleryApi.getById(id),
-    enabled: !!id,
-  });
-}
-
-export function useCreateGalleryItem() {
+export function useUploadGalleryItem() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: galleryApi.create,
+    mutationFn: galleryApi.upload,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: GALLERY_KEY }),
   });
 }
@@ -38,6 +30,14 @@ export function useDeleteGalleryItem() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: galleryApi.remove,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: GALLERY_KEY }),
+  });
+}
+
+export function useReorderGalleryItems() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: galleryApi.reorder,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: GALLERY_KEY }),
   });
 }

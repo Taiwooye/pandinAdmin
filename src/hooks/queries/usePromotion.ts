@@ -41,3 +41,11 @@ export function useDeletePromotion() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: PROMOTIONS_KEY }),
   });
 }
+
+export function useReorderPromotions() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: promotionsApi.reorder,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: PROMOTIONS_KEY }),
+  });
+}

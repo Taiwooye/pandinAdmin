@@ -41,3 +41,11 @@ export function useDeleteFoundationProgram() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: FOUNDATIONPROGRAMS_KEY }),
   });
 }
+
+export function useReorderFoundationPrograms() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: foundationProgramsApi.reorder,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: FOUNDATIONPROGRAMS_KEY }),
+  });
+}

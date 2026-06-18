@@ -18,26 +18,10 @@ export function useBooking(id: string) {
   });
 }
 
-export function useCreateBooking() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: bookingsApi.create,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: BOOKINGS_KEY }),
-  });
-}
-
 export function useUpdateBooking() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: unknown }) => bookingsApi.update(id, payload),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: BOOKINGS_KEY }),
-  });
-}
-
-export function useDeleteBooking() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: bookingsApi.remove,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: BOOKINGS_KEY }),
   });
 }

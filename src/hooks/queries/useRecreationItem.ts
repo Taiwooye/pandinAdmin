@@ -34,10 +34,10 @@ export function useUpdateRecreationItem() {
   });
 }
 
-export function useDeleteRecreationItem() {
+export function useReorderRecreationItems() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: recreationApi.remove,
+    mutationFn: recreationApi.reorder,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: RECREATION_KEY }),
   });
 }
