@@ -7,6 +7,7 @@ import { TOKEN_KEY } from "@/services/apiClient";
 
 type AuthContextType = {
   isAuthenticated: boolean;
+  initialized: boolean;
   login: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
 };
@@ -15,10 +16,12 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [initialized, setInitialized] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
-    if (localStorage.getItem(TOKEN_KEY)) setIsAuthenticated(true);
+    setIsAuthenticated(!!localStorage.getItem(TOKEN_KEY));
+    setInitialized(true);
   }, []);
 
   async function login(email: string, password: string) {
@@ -45,7 +48,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.push("/login");
   }
 
-  return <AuthContext.Provider value={{ isAuthenticated, login, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ isAuthenticated, initialized, login, logout }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useCreateRoomType, useAddRoomTypeUnit, useUploadRoomTypeMedia } from "@/hooks/queries/useRoomType";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -67,10 +68,20 @@ const PRESET_AMENITIES = [
   "Iron & Ironing Board",
 ];
 
-const STEPS = [
+const HOTEL_STEPS = [
   { id: 1, label: "About" },
   { id: 2, label: "Price" },
   { id: 3, label: "Room Nos." },
+  { id: 4, label: "Bathrooms" },
+  { id: 5, label: "Amenities" },
+  { id: 6, label: "Gallery" },
+  { id: 7, label: "Hero Image" },
+];
+
+const APARTMENT_STEPS = [
+  { id: 1, label: "About" },
+  { id: 2, label: "Price" },
+  { id: 3, label: "Units" },
   { id: 4, label: "Bathrooms" },
   { id: 5, label: "Amenities" },
   { id: 6, label: "Gallery" },
@@ -101,6 +112,15 @@ function readFileAsDataURL(file: File): Promise<string> {
     r.onerror = rej;
     r.readAsDataURL(file);
   });
+}
+
+function dataURLtoBlob(dataURL: string): Blob {
+  const [header, base64] = dataURL.split(",");
+  const mime = header.match(/:(.*?);/)?.[1] ?? "image/jpeg";
+  const bytes = atob(base64);
+  const arr = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  return new Blob([arr], { type: mime });
 }
 
 // ─── Step components ─────────────────────────────────────────────────────────
@@ -249,6 +269,81 @@ function StepPrice({ data, set }: { data: FormData; set: (p: Partial<FormData>) 
               <span className="font-semibold text-slate-800">₦{(data.price * nights).toLocaleString()}</span>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StepUnitCount({ data, set }: { data: FormData; set: (p: Partial<FormData>) => void }) {
+  const count = data.roomNumbers.length;
+
+  function applyCount(n: number) {
+    if (n < 0) return;
+    set({ roomNumbers: Array.from({ length: n }, (_, i) => String(i + 1)) });
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-4">
+          Number of Apartment Units
+        </label>
+        <div className="flex items-center justify-center gap-6">
+          <button
+            type="button"
+            onClick={() => applyCount(Math.max(0, count - 1))}
+            disabled={count <= 0}
+            className="w-12 h-12 rounded-full bg-slate-100 text-slate-700 text-2xl font-bold hover:bg-slate-200 disabled:opacity-30 transition-colors flex items-center justify-center"
+          >
+            −
+          </button>
+          <div className="text-center">
+            <div className="text-6xl font-black text-[#5A0E24]">{count}</div>
+            <p className="text-sm text-slate-400 mt-1">unit{count !== 1 ? "s" : ""}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => applyCount(count + 1)}
+            className="w-12 h-12 rounded-full bg-slate-100 text-slate-700 text-2xl font-bold hover:bg-slate-200 transition-colors flex items-center justify-center"
+          >
+            +
+          </button>
+        </div>
+      </div>
+
+      <div className="flex gap-2 justify-center">
+        {[1, 2, 3, 4, 5, 6].map((n) => (
+          <button
+            key={n}
+            type="button"
+            onClick={() => applyCount(n)}
+            className={`w-11 h-11 rounded-xl text-sm font-bold border-2 transition-all ${
+              count === n
+                ? "border-[#5A0E24] bg-[#5A0E24] text-white"
+                : "border-slate-200 text-slate-500 hover:border-slate-400"
+            }`}
+          >
+            {n}
+          </button>
+        ))}
+      </div>
+
+      {count > 0 && (
+        <div className="bg-slate-50 rounded-xl p-4">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+            {count} unit{count !== 1 ? "s" : ""} will be created
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {data.roomNumbers.map((n) => (
+              <span
+                key={n}
+                className="px-3 py-1 bg-white border border-slate-200 text-slate-600 text-xs font-semibold rounded-lg shadow-sm"
+              >
+                Unit {n}
+              </span>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -660,6 +755,12 @@ export default function NewRoomPage() {
   const [step, setStep] = useState(1);
   const [data, setData] = useState<FormData>(EMPTY);
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+
+  const createRoomType = useCreateRoomType();
+  const addUnit = useAddRoomTypeUnit();
+  const uploadMedia = useUploadRoomTypeMedia();
 
   function set(partial: Partial<FormData>) {
     setData((prev) => ({ ...prev, ...partial }));
@@ -680,13 +781,63 @@ export default function NewRoomPage() {
     if (step > 1) setStep((s) => s - 1);
   }
 
-  function handleSubmit() {
-    // In a real app: POST to API. Here we just show success.
-    console.log("New room data:", data);
-    setSubmitted(true);
+  async function handleSubmit() {
+    setSubmitting(true);
+    setSubmitError("");
+    try {
+      // 1. Create room type
+      const result = await createRoomType.mutateAsync({
+        name: data.name,
+        category: data.category,
+        description: data.roomTypeDesc,
+        property_type: data.propertyType,
+        capacity: data.capacity,
+        bedrooms: data.bedrooms,
+        price_per_night: data.price,
+        bathrooms: data.bathrooms,
+        facilities: data.facilities,
+      });
+
+      const newId: string = String(result?.data?.id ?? result?.id ?? "");
+
+      // 2. Add each room number as a unit
+      if (newId) {
+        for (const roomNumber of data.roomNumbers) {
+          await addUnit.mutateAsync({
+            id: newId,
+            payload: { room_number: roomNumber, status: "available" },
+          });
+        }
+
+        // 3. Upload hero image
+        if (data.heroImage) {
+          const heroFormData = new window.FormData();
+          heroFormData.append("image", dataURLtoBlob(data.heroImage), "hero.jpg");
+          heroFormData.append("type", "hero");
+          await uploadMedia.mutateAsync({ id: newId, formData: heroFormData });
+        }
+
+        // 4. Upload gallery images
+        for (let i = 0; i < data.galleryImages.length; i++) {
+          const gFormData = new window.FormData();
+          gFormData.append("image", dataURLtoBlob(data.galleryImages[i]), `gallery-${i}.jpg`);
+          gFormData.append("type", "gallery");
+          await uploadMedia.mutateAsync({ id: newId, formData: gFormData });
+        }
+      }
+
+      setSubmitted(true);
+    } catch {
+      setSubmitError("Failed to create room. Please check your inputs and try again.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (submitted) {
+    const isApt = data.propertyType === "apartment";
+    const backPath = isApt ? "/dashboard/apartments" : "/dashboard/rooms";
+    const unitLabel = isApt ? "unit" : "room number";
     return (
       <div className="max-w-lg mx-auto py-16 text-center">
         <div className="w-20 h-20 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-6">
@@ -694,29 +845,34 @@ export default function NewRoomPage() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
         </div>
-        <h2 className="text-2xl font-bold text-slate-800 mb-2">Room Created!</h2>
+        <h2 className="text-2xl font-bold text-slate-800 mb-2">
+          {isApt ? "Apartment Created!" : "Room Created!"}
+        </h2>
         <p className="text-slate-500 text-sm mb-2">
           <span className="font-semibold text-slate-700">{data.name}</span> ({data.category}) has been added successfully.
         </p>
-        <p className="text-slate-400 text-xs mb-8">{data.roomNumbers.length} room number{data.roomNumbers.length !== 1 ? "s" : ""} · {data.facilities.length} amenit{data.facilities.length === 1 ? "y" : "ies"} · {data.galleryImages.length} gallery photo{data.galleryImages.length !== 1 ? "s" : ""}</p>
+        <p className="text-slate-400 text-xs mb-8">
+          {data.roomNumbers.length} {unitLabel}{data.roomNumbers.length !== 1 ? "s" : ""} · {data.facilities.length} amenit{data.facilities.length === 1 ? "y" : "ies"} · {data.galleryImages.length} photo{data.galleryImages.length !== 1 ? "s" : ""}
+        </p>
         <div className="flex gap-3 justify-center">
           <button
             onClick={() => { setData(EMPTY); setStep(1); setSubmitted(false); }}
             className="px-5 py-2.5 bg-[#5A0E24] text-white font-semibold text-sm rounded-xl hover:bg-[#921224] transition-colors"
           >
-            Add Another Room
+            Add Another {isApt ? "Apartment" : "Room"}
           </button>
           <button
-            onClick={() => router.push("/dashboard/rooms")}
+            onClick={() => router.push(backPath)}
             className="px-5 py-2.5 bg-slate-100 text-slate-700 font-semibold text-sm rounded-xl hover:bg-slate-200 transition-colors"
           >
-            Back to Rooms
+            Back to {isApt ? "Apartments" : "Rooms"}
           </button>
         </div>
       </div>
     );
   }
 
+  const STEPS = data.propertyType === "apartment" ? APARTMENT_STEPS : HOTEL_STEPS;
   const isLast = step === STEPS.length;
 
   return (
@@ -729,7 +885,9 @@ export default function NewRoomPage() {
           </svg>
           Back
         </button>
-        <h1 className="text-2xl font-bold text-slate-800">Add New Room</h1>
+        <h1 className="text-2xl font-bold text-slate-800">
+          Add New {data.propertyType === "apartment" ? "Apartment" : "Hotel Room"}
+        </h1>
         <p className="text-slate-500 text-sm mt-1">Step {step} of {STEPS.length} — {STEPS[step - 1].label}</p>
       </div>
 
@@ -772,7 +930,8 @@ export default function NewRoomPage() {
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 mb-6">
         {step === 1 && <StepAbout data={data} set={set} />}
         {step === 2 && <StepPrice data={data} set={set} />}
-        {step === 3 && <StepRoomNumbers data={data} set={set} />}
+        {step === 3 && data.propertyType === "apartment" && <StepUnitCount data={data} set={set} />}
+        {step === 3 && data.propertyType !== "apartment" && <StepRoomNumbers data={data} set={set} />}
         {step === 4 && <StepBathrooms data={data} set={set} />}
         {step === 5 && <StepAmenities data={data} set={set} />}
         {step === 6 && <StepGallery data={data} set={set} />}
@@ -785,7 +944,7 @@ export default function NewRoomPage() {
           <span><span className="font-semibold text-slate-700">{data.name || "—"}</span></span>
           {data.category && <span className="text-[#5A0E24] font-semibold">{data.category}</span>}
           {data.price > 0 && <span>₦{data.price.toLocaleString()}/night</span>}
-          {data.roomNumbers.length > 0 && <span>{data.roomNumbers.length} room{data.roomNumbers.length !== 1 ? "s" : ""}</span>}
+          {data.roomNumbers.length > 0 && <span>{data.roomNumbers.length} {data.propertyType === "apartment" ? "unit" : "room"}{data.roomNumbers.length !== 1 ? "s" : ""}</span>}
           {data.bathrooms > 0 && <span>{data.bathrooms} bath</span>}
           {data.facilities.length > 0 && <span>{data.facilities.length} amenities</span>}
           {data.galleryImages.length > 0 && <span>{data.galleryImages.length} photos</span>}
@@ -794,12 +953,16 @@ export default function NewRoomPage() {
       )}
 
       {/* Navigation */}
+      {submitError && (
+        <p className="text-sm text-red-500 text-center mb-3">{submitError}</p>
+      )}
       <div className="flex gap-3">
         {step > 1 && (
           <button
             type="button"
             onClick={back}
-            className="px-5 py-3 bg-slate-100 text-slate-700 font-semibold text-sm rounded-xl hover:bg-slate-200 transition-colors"
+            disabled={submitting}
+            className="px-5 py-3 bg-slate-100 text-slate-700 font-semibold text-sm rounded-xl hover:bg-slate-200 transition-colors disabled:opacity-40"
           >
             Back
           </button>
@@ -807,14 +970,18 @@ export default function NewRoomPage() {
         <button
           type="button"
           onClick={next}
-          disabled={!canAdvance()}
+          disabled={!canAdvance() || submitting}
           className={`flex-1 py-3 font-semibold text-sm rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
             isLast
               ? "bg-green-600 text-white hover:bg-green-700"
               : "bg-[#5A0E24] text-white hover:bg-[#921224]"
           }`}
         >
-          {isLast ? "Create Room" : `Continue to ${STEPS[step].label}`}
+          {isLast
+            ? submitting
+              ? "Creating room…"
+              : "Create Room"
+            : `Continue to ${STEPS[step].label}`}
         </button>
       </div>
     </div>

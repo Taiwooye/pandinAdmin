@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import Link from "next/link";
 import { useDashboard } from "@/hooks/queries/useDashboard";
+import { useSiteStatsList } from "@/hooks/queries/useSiteStats";
 import EarningsChart from "@/components/EarningsChart";
 
 type DashboardBooking = {
@@ -37,9 +38,30 @@ function fmtNaira(value: number) {
   return `₦${value.toLocaleString()}`;
 }
 
+type SiteStat = {
+  id: number;
+  name?: string;
+  stat_name?: string;
+  label?: string;
+  value?: number | string;
+  stat_value?: number | string;
+};
+
+function siteStatLabel(s: SiteStat) { return s.name ?? s.stat_name ?? s.label ?? ""; }
+function siteStatValue(s: SiteStat) { return s.value ?? s.stat_value ?? "—"; }
+
+function siteStatsFromResponse(raw: unknown): SiteStat[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as SiteStat[];
+  const wrapped = raw as { data?: unknown };
+  if (Array.isArray(wrapped.data)) return wrapped.data as SiteStat[];
+  return [];
+}
+
 export default function DashboardPage() {
   const [search, setSearch] = useState("");
   const { data, isLoading, isError } = useDashboard();
+  const { data: siteStatsRaw, isLoading: siteStatsLoading } = useSiteStatsList();
   const overview = data?.data;
 
   const recentBookings: DashboardBooking[] = overview?.recent_bookings ?? [];
@@ -57,6 +79,8 @@ export default function DashboardPage() {
       b.service_type?.label?.toLowerCase().includes(q)
     );
   }, [search, recentBookings]);
+
+  const siteStats: SiteStat[] = siteStatsFromResponse(siteStatsRaw);
 
   const stats = overview?.stats;
   const occupancy = overview?.occupancy;
@@ -215,6 +239,37 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+
+          {/* Site stats */}
+          {(siteStatsLoading || siteStats.length > 0) && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-5">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="font-semibold text-slate-800 text-sm">Site Statistics</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Public-facing metrics from <span className="font-mono">/api/v1/admin/stats</span></p>
+                </div>
+                <Link href="/dashboard/admins" className="text-xs text-[#5A0E24] font-semibold hover:underline">
+                  Edit
+                </Link>
+              </div>
+              {siteStatsLoading ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="h-16 bg-slate-100 rounded-xl animate-pulse" />
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {siteStats.map((s) => (
+                    <div key={s.id} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                      <div className="text-xl font-black text-[#5A0E24]">{siteStatValue(s).toLocaleString()}</div>
+                      <div className="text-xs text-slate-500 mt-0.5 truncate">{siteStatLabel(s)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Upcoming check-ins */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 mb-6">

@@ -1,18 +1,30 @@
 "use client";
 
 import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { yupResolver } from "@hookform/resolvers/yup";
+import * as yup from "yup";
+import {
+  useTeamMemberList,
+  useInviteTeamMember,
+  useUpdateTeamMember,
+  useDeleteTeamMember,
+} from "@/hooks/queries/useTeamMember";
 
-type AdminRole = "Manager" | "Receptionist";
-type AdminStatus = "active" | "pending";
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-interface AdminUser {
-  id: string;
-  name: string;
+type TeamMember = {
+  id: number | string;
+  name?: string;
+  full_name?: string;
+  first_name?: string;
+  last_name?: string;
   email: string;
-  role: AdminRole;
-  status: AdminStatus;
-  joinedAt: string;
-}
+  role?: string | { value: string; label: string };
+  status?: string | { value: string; label: string };
+  created_at?: string;
+  joined_at?: string;
+};
 
 type PermissionKey =
   | "view_bookings"
@@ -32,6 +44,64 @@ interface Permission {
 
 type RolePermissions = Record<PermissionKey, boolean>;
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function membersFromResponse(raw: unknown): TeamMember[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as TeamMember[];
+  const w = raw as { data?: unknown };
+  if (Array.isArray(w.data)) return w.data as TeamMember[];
+  return [];
+}
+
+function memberName(m: TeamMember): string {
+  if (m.name) return m.name;
+  if (m.full_name) return m.full_name;
+  if (m.first_name || m.last_name) return `${m.first_name ?? ""} ${m.last_name ?? ""}`.trim();
+  return m.email;
+}
+
+function memberRole(m: TeamMember): string {
+  const r = m.role;
+  if (!r) return "—";
+  if (typeof r === "string") return r;
+  return r.label ?? r.value ?? "—";
+}
+
+function memberStatus(m: TeamMember): string {
+  const s = m.status;
+  if (!s) return "active";
+  if (typeof s === "string") return s.toLowerCase();
+  return (s.value ?? "active").toLowerCase();
+}
+
+function memberId(m: TeamMember): string {
+  return String(m.id);
+}
+
+function isSuperAdmin(m: TeamMember): boolean {
+  const r = memberRole(m).toLowerCase().replace(/[\s_-]/g, "");
+  return r === "superadmin" || r === "super";
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const ROLES: { value: string; label: string; desc: string }[] = [
+  { value: "manager", label: "Manager", desc: "Full access — manage everything including bookings, rooms, menu, and other admins" },
+  { value: "receptionist", label: "Receptionist", desc: "View and update bookings only" },
+];
+
+const ROLE_COLORS: Record<string, string> = {
+  Manager:      "bg-[#5A0E24]/10 text-[#5A0E24]",
+  manager:      "bg-[#5A0E24]/10 text-[#5A0E24]",
+  Receptionist: "bg-amber-50 text-amber-700",
+  receptionist: "bg-amber-50 text-amber-700",
+};
+
+function roleColor(role: string) {
+  return ROLE_COLORS[role] ?? "bg-slate-100 text-slate-600";
+}
+
 const PERMISSIONS: Permission[] = [
   { key: "view_bookings",      label: "View Bookings",       desc: "See all booking records and guest details" },
   { key: "manage_bookings",    label: "Manage Bookings",     desc: "Update booking info and check-in/out dates" },
@@ -45,121 +115,121 @@ const PERMISSIONS: Permission[] = [
 
 const DEFAULT_PERMISSIONS: Record<"Manager" | "Receptionist", RolePermissions> = {
   Manager: {
-    view_bookings:      true,
-    manage_bookings:    true,
-    verify_payments:    true,
-    view_earnings:      true,
-    manage_rooms:       true,
-    manage_apartments:  true,
-    manage_lounge_menu: true,
-    invite_admins:      true,
+    view_bookings: true, manage_bookings: true, verify_payments: true, view_earnings: true,
+    manage_rooms: true, manage_apartments: true, manage_lounge_menu: true, invite_admins: true,
   },
   Receptionist: {
-    view_bookings:      true,
-    manage_bookings:    true,
-    verify_payments:    false,
-    view_earnings:      false,
-    manage_rooms:       false,
-    manage_apartments:  false,
-    manage_lounge_menu: false,
-    invite_admins:      false,
+    view_bookings: true, manage_bookings: true, verify_payments: false, view_earnings: false,
+    manage_rooms: false, manage_apartments: false, manage_lounge_menu: false, invite_admins: false,
   },
 };
 
-const ROLES: { value: AdminRole; desc: string }[] = [
-  { value: "Manager",      desc: "Full access — manage everything including bookings, rooms, menu, and other admins" },
-  { value: "Receptionist", desc: "View and update bookings only" },
-];
+// ─── Invite form schema ───────────────────────────────────────────────────────
 
-const ROLE_COLORS: Record<AdminRole, string> = {
-  Manager:        "bg-[#5A0E24]/10 text-[#5A0E24]",
-  Receptionist:   "bg-amber-50 text-amber-700",
-};
+const inviteSchema = yup.object({
+  name: yup.string().trim().required("Full name is required"),
+  email: yup.string().trim().email("Enter a valid email address").required("Email is required"),
+  password: yup.string().min(8, "Password must be at least 8 characters").required("Password is required"),
+  password_confirmation: yup
+    .string()
+    .oneOf([yup.ref("password")], "Passwords do not match")
+    .required("Please confirm your password"),
+  role: yup.string().required("Role is required"),
+});
 
-// Simulated current logged-in user role
-const CURRENT_USER_ROLE: AdminRole = "Manager";
+type InviteFormValues = yup.InferType<typeof inviteSchema>;
 
-const INITIAL_ADMINS: AdminUser[] = [
-  {
-    id: "a1",
-    name: "Adaeze Nwosu",
-    email: "adaeze.nwosu@pandinhotels.com",
-    role: "Manager",
-    status: "active",
-    joinedAt: "2026-01-01",
-  },
-  {
-    id: "a2",
-    name: "Emeka Okafor",
-    email: "emeka.okafor@pandinhotels.com",
-    role: "Receptionist",
-    status: "active",
-    joinedAt: "2026-02-14",
-  },
-  {
-    id: "a3",
-    name: "Funmilayo Adeyemi",
-    email: "funmi.adeyemi@pandinhotels.com",
-    role: "Receptionist",
-    status: "active",
-    joinedAt: "2026-03-05",
-  },
-];
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AdminsPage() {
-  const [admins, setAdmins] = useState<AdminUser[]>(INITIAL_ADMINS);
+  // ── Invite modal state
   const [showInvite, setShowInvite] = useState(false);
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState<AdminRole>("Receptionist");
-  const [sent, setSent] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editRole, setEditRole] = useState<AdminRole>("Receptionist");
+  const [showPassword, setShowPassword] = useState(false);
 
-  // Permissions state — Manager and Receptionist only
+  const {
+    register,
+    handleSubmit,
+    reset,
+    setValue,
+    watch,
+    formState: { errors, isValid },
+  } = useForm<InviteFormValues>({
+    resolver: yupResolver(inviteSchema),
+    defaultValues: { name: "", email: "", password: "", password_confirmation: "", role: "manager" },
+    mode: "onChange",
+  });
+
+  const watchedRole = watch("role");
+
+  // ── Role edit state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editRole, setEditRole] = useState("manager");
+
+  // ── Toast
+  const [toast, setToast] = useState<string | null>(null);
+
+  // ── Permissions (local UI — no API endpoint)
   const [permissions, setPermissions] = useState<Record<"Manager" | "Receptionist", RolePermissions>>(DEFAULT_PERMISSIONS);
   const [permSaved, setPermSaved] = useState(false);
 
-  const activeAdmins = admins.filter((a) => a.status === "active");
-  const pendingAdmins = admins.filter((a) => a.status === "pending");
+  // ── Data
+  const { data: raw, isLoading, isError, error } = useTeamMemberList();
+  const members: TeamMember[] = membersFromResponse(raw);
 
-  const canManagePermissions = CURRENT_USER_ROLE === "Manager";
+  const activeMembers = members.filter((m) => memberStatus(m) !== "pending" && memberStatus(m) !== "invited");
+  const pendingMembers = members.filter((m) => memberStatus(m) === "pending" || memberStatus(m) === "invited");
 
-  function sendInvite() {
-    if (!name.trim() || !email.trim()) return;
-    const newAdmin: AdminUser = {
-      id: `a${Date.now()}`,
-      name: name.trim(),
-      email: email.trim(),
-      role,
-      status: "pending",
-      joinedAt: new Date().toISOString().slice(0, 10),
-    };
-    setAdmins((prev) => [...prev, newAdmin]);
-    setSent(email.trim());
-    setName(""); setEmail(""); setRole("Receptionist");
-    setShowInvite(false);
+  // ── Mutations
+  const inviteMutation = useInviteTeamMember();
+  const updateMutation = useUpdateTeamMember();
+  const deleteMutation = useDeleteTeamMember();
+
+  // ── Handlers
+
+  function showToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 4000);
   }
 
-  function removeAdmin(id: string) {
-    setAdmins((prev) => prev.filter((a) => a.id !== id));
+  function openInvite() {
+    reset({ name: "", email: "", password: "", password_confirmation: "", role: "manager" });
+    setShowPassword(false);
+    setShowInvite(true);
   }
 
-  function saveRole(id: string) {
-    setAdmins((prev) => prev.map((a) => a.id === id ? { ...a, role: editRole } : a));
-    setEditingId(null);
+  const onSubmitInvite = handleSubmit((values) => {
+    inviteMutation.mutate(
+      { name: values.name, email: values.email, role: values.role, password: values.password, password_confirmation: values.password_confirmation },
+      {
+        onSuccess: () => {
+          setShowInvite(false);
+          showToast(`Invitation sent to ${values.email}`);
+          reset();
+        },
+      }
+    );
+  });
+
+  function startEditRole(m: TeamMember) {
+    setEditingId(memberId(m));
+    setEditRole(memberRole(m));
   }
 
-  function resendInvite(email: string) {
-    setSent(email);
-    setTimeout(() => setSent(null), 3000);
+  function saveRole(m: TeamMember) {
+    updateMutation.mutate(
+      { id: memberId(m), payload: { name: memberName(m), role: editRole } },
+      { onSuccess: () => setEditingId(null) }
+    );
+  }
+
+  function removeMember(m: TeamMember) {
+    deleteMutation.mutate(memberId(m), {
+      onSuccess: () => showToast(`${memberName(m)} removed from the team`),
+    });
   }
 
   function togglePermission(role: "Manager" | "Receptionist", key: PermissionKey) {
-    setPermissions((prev) => ({
-      ...prev,
-      [role]: { ...prev[role], [key]: !prev[role][key] },
-    }));
+    setPermissions((prev) => ({ ...prev, [role]: { ...prev[role], [key]: !prev[role][key] } }));
     setPermSaved(false);
   }
 
@@ -168,16 +238,18 @@ export default function AdminsPage() {
     setTimeout(() => setPermSaved(false), 3000);
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+
   return (
     <div>
       {/* Header */}
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Admin Team</h1>
-          <p className="text-slate-500 text-sm mt-1">Manage who has access to this admin portal and what they can do.</p>
+          <p className="text-slate-500 text-sm mt-1">Manage who has access to this portal and what they can do.</p>
         </div>
         <button
-          onClick={() => { setShowInvite(true); setSent(null); }}
+          onClick={openInvite}
           className="flex items-center gap-2 px-4 py-2.5 bg-[#5A0E24] text-white text-sm font-semibold rounded-xl hover:bg-[#921224] transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
@@ -187,14 +259,14 @@ export default function AdminsPage() {
         </button>
       </div>
 
-      {/* Sent toast */}
-      {sent && (
+      {/* Toast */}
+      {toast && (
         <div className="mb-5 flex items-center gap-3 bg-green-50 border border-green-100 text-green-700 px-4 py-3 rounded-xl text-sm">
           <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          Invitation sent to <span className="font-semibold">{sent}</span>
-          <button onClick={() => setSent(null)} className="ml-auto text-green-400 hover:text-green-600">
+          {toast}
+          <button onClick={() => setToast(null)} className="ml-auto text-green-400 hover:text-green-600">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -206,103 +278,156 @@ export default function AdminsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
         {ROLES.map((r) => (
           <div key={r.value} className="bg-white rounded-xl border border-slate-100 p-4">
-            <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-bold mb-2 ${ROLE_COLORS[r.value]}`}>{r.value}</span>
+            <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-bold mb-2 ${roleColor(r.value)}`}>{r.label}</span>
             <p className="text-xs text-slate-400 leading-snug">{r.desc}</p>
           </div>
         ))}
       </div>
 
-      {/* Active admins */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-5">
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-green-500" />
-          <h2 className="font-semibold text-slate-800 text-sm">Active Admins</h2>
-          <span className="text-xs text-slate-400 ml-1">{activeAdmins.length}</span>
-        </div>
-        <div className="divide-y divide-slate-50">
-          {activeAdmins.map((admin) => (
-            <div key={admin.id} className="px-6 py-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-full bg-[#5A0E24]/10 flex items-center justify-center text-[#5A0E24] font-bold text-sm shrink-0">
-                {admin.name.charAt(0)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold text-slate-800 text-sm">{admin.name}</p>
-                <p className="text-xs text-slate-400">{admin.email}</p>
-              </div>
-
-              {editingId === admin.id ? (
-                <div className="flex items-center gap-2 shrink-0">
-                  <select
-                    value={editRole}
-                    onChange={(e) => setEditRole(e.target.value as AdminRole)}
-                    className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  >
-                    {ROLES.map((r) => (
-                      <option key={r.value} value={r.value}>{r.value}</option>
-                    ))}
-                  </select>
-                  <button onClick={() => saveRole(admin.id)} className="px-3 py-1.5 bg-[#5A0E24] text-white text-xs font-semibold rounded-lg hover:bg-[#921224]">Save</button>
-                  <button onClick={() => setEditingId(null)} className="px-3 py-1.5 bg-slate-100 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-200">Cancel</button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${ROLE_COLORS[admin.role]}`}>{admin.role}</span>
-                  {admin.id !== "a1" && (
-                    <>
-                      <button
-                        onClick={() => { setEditingId(admin.id); setEditRole(admin.role); }}
-                        className="px-3 py-1.5 text-xs font-semibold bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
-                      >
-                        Edit Role
-                      </button>
-                      <button
-                        onClick={() => removeAdmin(admin.id)}
-                        className="px-3 py-1.5 text-xs font-semibold bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors"
-                      >
-                        Remove
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Pending invitations */}
-      {pendingAdmins.length > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-5">
-          <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-amber-400" />
-            <h2 className="font-semibold text-slate-800 text-sm">Pending Invitations</h2>
-            <span className="text-xs text-slate-400 ml-1">{pendingAdmins.length}</span>
-          </div>
-          <div className="divide-y divide-slate-50">
-            {pendingAdmins.map((admin) => (
-              <div key={admin.id} className="px-6 py-4 flex items-center gap-4">
-                <div className="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center text-amber-500 shrink-0">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                  </svg>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-slate-800 text-sm">{admin.name}</p>
-                  <p className="text-xs text-slate-400">{admin.email}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${ROLE_COLORS[admin.role]}`}>{admin.role}</span>
-                  <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-600">Awaiting</span>
-                  <button onClick={() => resendInvite(admin.email)} className="px-3 py-1.5 text-xs font-semibold bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 transition-colors">Resend</button>
-                  <button onClick={() => removeAdmin(admin.id)} className="px-3 py-1.5 text-xs font-semibold bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors">Cancel</button>
-                </div>
-              </div>
-            ))}
-          </div>
+      {/* Loading */}
+      {isLoading && (
+        <div className="flex items-center gap-3 justify-center py-16 text-slate-400">
+          <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <span className="text-sm">Loading team…</span>
         </div>
       )}
 
-      {/* ── Permission Settings ─────────────────────────────────────── */}
+      {/* Error */}
+      {isError && (
+        <div className="text-center py-12 space-y-1">
+          <p className="text-red-500 font-semibold text-sm">Failed to load team members.</p>
+          {error instanceof Error && <p className="text-xs text-slate-400 font-mono">{error.message}</p>}
+        </div>
+      )}
+
+      {!isLoading && !isError && (
+        <>
+          {/* Active members */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-5">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-green-500" />
+              <h2 className="font-semibold text-slate-800 text-sm">Active Members</h2>
+              <span className="text-xs text-slate-400 ml-1">{activeMembers.length}</span>
+            </div>
+
+            {activeMembers.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 text-sm">No active members yet.</div>
+            ) : (
+              <div className="divide-y divide-slate-50">
+                {activeMembers.map((m) => {
+                  const id = memberId(m);
+                  const name = memberName(m);
+                  const role = memberRole(m);
+                  const isEditing = editingId === id;
+                  return (
+                    <div key={id} className="px-6 py-4 flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-full bg-[#5A0E24]/10 flex items-center justify-center text-[#5A0E24] font-bold text-sm shrink-0">
+                        {name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-slate-800 text-sm">{name}</p>
+                        <p className="text-xs text-slate-400">{m.email}</p>
+                      </div>
+
+                      {isEditing ? (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <select
+                            value={editRole}
+                            onChange={(e) => setEditRole(e.target.value)}
+                            className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                          >
+                            {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                          </select>
+                          <button
+                            onClick={() => saveRole(m)}
+                            disabled={updateMutation.isPending}
+                            className="px-3 py-1.5 bg-[#5A0E24] text-white text-xs font-semibold rounded-lg hover:bg-[#921224] disabled:opacity-50"
+                          >
+                            {updateMutation.isPending ? "…" : "Save"}
+                          </button>
+                          <button onClick={() => setEditingId(null)} className="px-3 py-1.5 bg-slate-100 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-200">
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${roleColor(role)}`}>{role}</span>
+                          {isSuperAdmin(m) ? (
+                            <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-400 select-none">Protected</span>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => startEditRole(m)}
+                                className="px-3 py-1.5 text-xs font-semibold bg-slate-50 text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
+                              >
+                                Edit Role
+                              </button>
+                              <button
+                                onClick={() => removeMember(m)}
+                                disabled={deleteMutation.isPending}
+                                className="px-3 py-1.5 text-xs font-semibold bg-red-50 text-red-600 rounded-lg hover:bg-red-100 disabled:opacity-40 transition-colors"
+                              >
+                                Remove
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Pending invitations */}
+          {pendingMembers.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden mb-5">
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-amber-400" />
+                <h2 className="font-semibold text-slate-800 text-sm">Pending Invitations</h2>
+                <span className="text-xs text-slate-400 ml-1">{pendingMembers.length}</span>
+              </div>
+              <div className="divide-y divide-slate-50">
+                {pendingMembers.map((m) => {
+                  const id = memberId(m);
+                  const name = memberName(m);
+                  const role = memberRole(m);
+                  return (
+                    <div key={id} className="px-6 py-4 flex items-center gap-4">
+                      <div className="w-10 h-10 rounded-full bg-amber-50 flex items-center justify-center text-amber-500 shrink-0">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-slate-800 text-sm">{name}</p>
+                        <p className="text-xs text-slate-400">{m.email}</p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${roleColor(role)}`}>{role}</span>
+                        <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-600">Awaiting</span>
+                        <button
+                          onClick={() => removeMember(m)}
+                          disabled={deleteMutation.isPending}
+                          className="px-3 py-1.5 text-xs font-semibold bg-red-50 text-red-600 rounded-lg hover:bg-red-100 disabled:opacity-40 transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Permission Settings */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -316,130 +441,141 @@ export default function AdminsPage() {
               <p className="text-xs text-slate-400 mt-0.5">Control what each role can do across the portal</p>
             </div>
           </div>
-          <span className="px-2.5 py-1 bg-blue-50 text-blue-700 text-xs font-bold rounded-full">Manager Access</span>
         </div>
 
-        {canManagePermissions ? (
-          <div className="p-6">
-            {/* Saved toast */}
-            {permSaved && (
-              <div className="mb-5 flex items-center gap-2 bg-green-50 border border-green-100 text-green-700 px-4 py-3 rounded-xl text-sm">
-                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                Permissions saved successfully.
-              </div>
-            )}
-
-            {/* Column headers */}
-            <div className="grid grid-cols-[1fr_120px_120px] gap-4 mb-3 px-2">
-              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Permission</div>
-              <div className="text-xs font-semibold text-blue-600 uppercase tracking-wider text-center">Manager</div>
-              <div className="text-xs font-semibold text-amber-600 uppercase tracking-wider text-center">Receptionist</div>
+        <div className="p-6">
+          {permSaved && (
+            <div className="mb-5 flex items-center gap-2 bg-green-50 border border-green-100 text-green-700 px-4 py-3 rounded-xl text-sm">
+              <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Permissions saved.
             </div>
+          )}
 
-            {/* Permission rows */}
-            <div className="divide-y divide-slate-50 rounded-xl border border-slate-100 overflow-hidden">
-              {PERMISSIONS.map((p) => (
-                <div key={p.key} className="grid grid-cols-[1fr_120px_120px] gap-4 items-center px-4 py-3.5 bg-white hover:bg-slate-50 transition-colors">
-                  <div>
-                    <p className="text-sm font-medium text-slate-700">{p.label}</p>
-                    <p className="text-xs text-slate-400 mt-0.5">{p.desc}</p>
-                  </div>
+          <div className="grid grid-cols-[1fr_120px_120px] gap-4 mb-3 px-2">
+            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Permission</div>
+            <div className="text-xs font-semibold text-[#5A0E24] uppercase tracking-wider text-center">Manager</div>
+            <div className="text-xs font-semibold text-amber-600 uppercase tracking-wider text-center">Receptionist</div>
+          </div>
 
-                  {/* Manager toggle */}
-                  <div className="flex justify-center">
-                    <button
-                      onClick={() => togglePermission("Manager", p.key)}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-                        permissions.Manager[p.key] ? "bg-blue-600" : "bg-slate-200"
-                      }`}
-                      role="switch"
-                      aria-checked={permissions.Manager[p.key]}
-                    >
-                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${permissions.Manager[p.key] ? "translate-x-6" : "translate-x-1"}`} />
-                    </button>
-                  </div>
-
-                  {/* Receptionist toggle */}
-                  <div className="flex justify-center">
-                    <button
-                      onClick={() => togglePermission("Receptionist", p.key)}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-                        permissions.Receptionist[p.key] ? "bg-amber-500" : "bg-slate-200"
-                      }`}
-                      role="switch"
-                      aria-checked={permissions.Receptionist[p.key]}
-                    >
-                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${permissions.Receptionist[p.key] ? "translate-x-6" : "translate-x-1"}`} />
-                    </button>
-                  </div>
+          <div className="divide-y divide-slate-50 rounded-xl border border-slate-100 overflow-hidden">
+            {PERMISSIONS.map((p) => (
+              <div key={p.key} className="grid grid-cols-[1fr_120px_120px] gap-4 items-center px-4 py-3.5 bg-white hover:bg-slate-50 transition-colors">
+                <div>
+                  <p className="text-sm font-medium text-slate-700">{p.label}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{p.desc}</p>
                 </div>
-              ))}
-            </div>
-
-            {/* Super Admin note */}
-            <p className="text-xs text-slate-400 mt-4 flex items-center gap-1.5">
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              Changes apply to all users with that role across the portal.
-            </p>
-
-            <div className="mt-5 flex justify-end">
-              <button
-                onClick={savePermissions}
-                className="px-5 py-2.5 bg-[#5A0E24] text-white text-sm font-semibold rounded-xl hover:bg-[#921224] transition-colors"
-              >
-                Save Permissions
-              </button>
-            </div>
+                {(["Manager", "Receptionist"] as const).map((role) => (
+                  <div key={role} className="flex justify-center">
+                    <button
+                      onClick={() => togglePermission(role, p.key)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                        permissions[role][p.key] ? (role === "Manager" ? "bg-[#5A0E24]" : "bg-amber-500") : "bg-slate-200"
+                      }`}
+                      role="switch"
+                      aria-checked={permissions[role][p.key]}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${permissions[role][p.key] ? "translate-x-6" : "translate-x-1"}`} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
-        ) : (
-          /* Locked state for Receptionist */
-          <div className="px-6 py-12 text-center">
-            <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto mb-3">
-              <svg className="w-6 h-6 text-slate-400" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-            </div>
-            <p className="text-sm font-semibold text-slate-600">Access Restricted</p>
-            <p className="text-xs text-slate-400 mt-1">Only Managers and above can view or change permission settings.</p>
+
+          <p className="text-xs text-slate-400 mt-4 flex items-center gap-1.5">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Changes apply to all users with that role across the portal.
+          </p>
+
+          <div className="mt-5 flex justify-end">
+            <button onClick={savePermissions} className="px-5 py-2.5 bg-[#5A0E24] text-white text-sm font-semibold rounded-xl hover:bg-[#921224] transition-colors">
+              Save Permissions
+            </button>
           </div>
-        )}
+        </div>
       </div>
 
-      {/* Invite modal */}
+      {/* ── Invite modal ─────────────────────────────────────────────────────── */}
       {showInvite && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowInvite(false)}>
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm space-y-5" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setShowInvite(false)}>
+          <form
+            className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm space-y-4 max-h-[92vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={onSubmitInvite}
+            noValidate
+          >
             <div>
               <h3 className="font-bold text-slate-800">Invite New Admin</h3>
-              <p className="text-xs text-slate-400 mt-0.5">An invitation link will be sent to their email.</p>
+              <p className="text-xs text-slate-400 mt-0.5">They&apos;ll receive an invitation to access the portal.</p>
             </div>
 
+            {/* Full Name */}
             <div>
               <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Full Name *</label>
               <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                {...register("name")}
                 placeholder="e.g. Amaka Johnson"
                 autoFocus
-                className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 ${errors.name ? "border-red-300 bg-red-50" : "border-slate-200"}`}
               />
+              {errors.name && <p className="text-xs text-red-500 mt-1">{errors.name.message}</p>}
             </div>
 
+            {/* Email */}
             <div>
               <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Email Address *</label>
               <input
+                {...register("email")}
                 type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
                 placeholder="amaka@example.com"
-                className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 ${errors.email ? "border-red-300 bg-red-50" : "border-slate-200"}`}
               />
+              {errors.email && <p className="text-xs text-red-500 mt-1">{errors.email.message}</p>}
             </div>
 
+            {/* Password */}
+            <div>
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Password *</label>
+              <div className="relative">
+                <input
+                  {...register("password")}
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Min. 8 characters"
+                  className={`w-full px-4 py-2.5 pr-10 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 ${errors.password ? "border-red-300 bg-red-50" : "border-slate-200"}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    {showPassword
+                      ? <path strokeLinecap="round" strokeLinejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                      : <><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></>
+                    }
+                  </svg>
+                </button>
+              </div>
+              {errors.password && <p className="text-xs text-red-500 mt-1">{errors.password.message}</p>}
+            </div>
+
+            {/* Confirm Password */}
+            <div>
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Confirm Password *</label>
+              <input
+                {...register("password_confirmation")}
+                type={showPassword ? "text" : "password"}
+                placeholder="Repeat password"
+                className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 ${errors.password_confirmation ? "border-red-300 bg-red-50" : "border-slate-200"}`}
+              />
+              {errors.password_confirmation && <p className="text-xs text-red-500 mt-1">{errors.password_confirmation.message}</p>}
+            </div>
+
+            {/* Role */}
             <div>
               <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-2">Role *</label>
               <div className="space-y-2">
@@ -447,39 +583,41 @@ export default function AdminsPage() {
                   <button
                     key={r.value}
                     type="button"
-                    onClick={() => setRole(r.value)}
+                    onClick={() => setValue("role", r.value, { shouldValidate: true })}
                     className={`w-full flex items-start gap-3 p-3 rounded-xl border-2 text-left transition-all ${
-                      role === r.value ? "border-[#5A0E24] bg-[#5A0E24]/5" : "border-slate-100 hover:border-slate-200"
+                      watchedRole === r.value ? "border-[#5A0E24] bg-[#5A0E24]/5" : "border-slate-100 hover:border-slate-200"
                     }`}
                   >
-                    <div className={`w-4 h-4 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center transition-all ${role === r.value ? "border-[#5A0E24] bg-[#5A0E24]" : "border-slate-300"}`}>
-                      {role === r.value && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    <div className={`w-4 h-4 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center transition-all ${watchedRole === r.value ? "border-[#5A0E24] bg-[#5A0E24]" : "border-slate-300"}`}>
+                      {watchedRole === r.value && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
                     </div>
                     <div>
-                      <p className={`text-sm font-semibold ${role === r.value ? "text-[#5A0E24]" : "text-slate-700"}`}>{r.value}</p>
+                      <p className={`text-sm font-semibold ${watchedRole === r.value ? "text-[#5A0E24]" : "text-slate-700"}`}>{r.label}</p>
                       <p className="text-xs text-slate-400 mt-0.5">{r.desc}</p>
                     </div>
                   </button>
                 ))}
               </div>
+              {errors.role && <p className="text-xs text-red-500 mt-1">{errors.role.message}</p>}
             </div>
+
+            {inviteMutation.isError && (
+              <p className="text-xs text-red-500">Failed to send invitation. Please try again.</p>
+            )}
 
             <div className="flex gap-2 pt-1">
               <button
-                onClick={sendInvite}
-                disabled={!name.trim() || !email.trim()}
+                type="submit"
+                disabled={!isValid || inviteMutation.isPending}
                 className="flex-1 py-2.5 bg-[#5A0E24] text-white font-semibold rounded-xl text-sm hover:bg-[#921224] disabled:opacity-40 transition-colors"
               >
-                Send Invitation
+                {inviteMutation.isPending ? "Sending…" : "Send Invitation"}
               </button>
-              <button
-                onClick={() => setShowInvite(false)}
-                className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold rounded-xl text-sm hover:bg-slate-200"
-              >
+              <button type="button" onClick={() => setShowInvite(false)} className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold rounded-xl text-sm hover:bg-slate-200">
                 Cancel
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
     </div>
