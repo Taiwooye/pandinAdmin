@@ -16,3 +16,14 @@ apiClient.interceptors.request.use((config) => {
   }
   return config;
 });
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const apiMessage = error?.response?.data?.message;
+    if (apiMessage && typeof apiMessage === "string") {
+      error.message = apiMessage;
+    }
+    return Promise.reject(error);
+  }
+);
