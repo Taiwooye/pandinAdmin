@@ -136,7 +136,7 @@ export default function BookingsPage() {
   }
 
   const filtered = useMemo(() => {
-    const list = bookingsData ?? [];
+    const list: BookingListItem[] = bookingsData ?? [];
     const q = search.toLowerCase().trim();
     if (!q) return list;
     return list.filter(
