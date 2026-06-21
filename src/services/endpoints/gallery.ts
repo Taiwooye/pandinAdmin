@@ -8,7 +8,9 @@ export async function list(params?: Record<string, unknown>) {
 }
 
 export async function upload(formData: FormData) {
-  const { data } = await apiClient.post(BASE_PATH, formData);
+  const { data } = await apiClient.post(BASE_PATH, formData, {
+    headers: { "Content-Type": undefined },
+  });
   return data;
 }
 

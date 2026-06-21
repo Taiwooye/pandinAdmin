@@ -10,6 +10,7 @@ import {
   useUpdateTeamMember,
   useDeleteTeamMember,
 } from "@/hooks/queries/useTeamMember";
+import { usePermissionsMatrix, useUpdateRolePermissions } from "@/hooks/queries/usePermissions";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,23 +27,12 @@ type TeamMember = {
   joined_at?: string;
 };
 
-type PermissionKey =
-  | "view_bookings"
-  | "manage_bookings"
-  | "verify_payments"
-  | "view_earnings"
-  | "manage_rooms"
-  | "manage_apartments"
-  | "manage_lounge_menu"
-  | "invite_admins";
-
-interface Permission {
-  key: PermissionKey;
+type ApiPermissionRow = {
+  permission: string;
   label: string;
-  desc: string;
-}
-
-type RolePermissions = Record<PermissionKey, boolean>;
+  description: string;
+  roles: Record<string, boolean>;
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -102,27 +92,6 @@ function roleColor(role: string) {
   return ROLE_COLORS[role] ?? "bg-slate-100 text-slate-600";
 }
 
-const PERMISSIONS: Permission[] = [
-  { key: "view_bookings",      label: "View Bookings",       desc: "See all booking records and guest details" },
-  { key: "manage_bookings",    label: "Manage Bookings",     desc: "Update booking info and check-in/out dates" },
-  { key: "verify_payments",    label: "Verify Payments",     desc: "Toggle payment verified status on bookings" },
-  { key: "view_earnings",      label: "View Earnings",       desc: "Access revenue reports and earnings overview" },
-  { key: "manage_rooms",       label: "Manage Rooms",        desc: "Edit room prices, availability, and details" },
-  { key: "manage_apartments",  label: "Manage Apartments",   desc: "Edit apartment availability and pricing" },
-  { key: "manage_lounge_menu", label: "Manage Lounge Menu",  desc: "Add, edit, or remove lounge menu items" },
-  { key: "invite_admins",      label: "Invite Admins",       desc: "Invite new team members to the portal" },
-];
-
-const DEFAULT_PERMISSIONS: Record<"Manager" | "Receptionist", RolePermissions> = {
-  Manager: {
-    view_bookings: true, manage_bookings: true, verify_payments: true, view_earnings: true,
-    manage_rooms: true, manage_apartments: true, manage_lounge_menu: true, invite_admins: true,
-  },
-  Receptionist: {
-    view_bookings: true, manage_bookings: true, verify_payments: false, view_earnings: false,
-    manage_rooms: false, manage_apartments: false, manage_lounge_menu: false, invite_admins: false,
-  },
-};
 
 // ─── Invite form schema ───────────────────────────────────────────────────────
 
@@ -168,9 +137,23 @@ export default function AdminsPage() {
   // ── Toast
   const [toast, setToast] = useState<string | null>(null);
 
-  // ── Permissions (local UI — no API endpoint)
-  const [permissions, setPermissions] = useState<Record<"Manager" | "Receptionist", RolePermissions>>(DEFAULT_PERMISSIONS);
+  // ── Permissions (live from API)
+  const { data: permRaw, isLoading: permLoading } = usePermissionsMatrix();
+  const updateRolePermMutation = useUpdateRolePermissions();
+
+  // permMatrix: array of rows from the API
+  const permMatrix: ApiPermissionRow[] = (() => {
+    if (!permRaw) return [];
+    const w = permRaw as { data?: unknown };
+    return (Array.isArray(w.data) ? w.data : Array.isArray(permRaw) ? permRaw : []) as ApiPermissionRow[];
+  })();
+
+  // local overrides: role → { permission_key → bool }
+  const [localPerms, setLocalPerms] = useState<Record<string, Record<string, boolean>>>({});
+  // which roles have unsaved changes
+  const [dirtyRoles, setDirtyRoles] = useState<Set<string>>(new Set());
   const [permSaved, setPermSaved] = useState(false);
+  const [permError, setPermError] = useState("");
 
   // ── Data
   const { data: raw, isLoading, isError, error } = useTeamMemberList();
@@ -228,14 +211,46 @@ export default function AdminsPage() {
     });
   }
 
-  function togglePermission(role: "Manager" | "Receptionist", key: PermissionKey) {
-    setPermissions((prev) => ({ ...prev, [role]: { ...prev[role], [key]: !prev[role][key] } }));
-    setPermSaved(false);
+  function resolvedPerm(role: string, key: string): boolean {
+    if (localPerms[role] && key in localPerms[role]) return localPerms[role][key];
+    const row = permMatrix.find((r) => r.permission === key);
+    return row?.roles[role] ?? false;
   }
 
-  function savePermissions() {
-    setPermSaved(true);
-    setTimeout(() => setPermSaved(false), 3000);
+  function togglePermission(role: string, key: string) {
+    const current = resolvedPerm(role, key);
+    setLocalPerms((prev) => ({
+      ...prev,
+      [role]: { ...(prev[role] ?? {}), [key]: !current },
+    }));
+    setDirtyRoles((prev) => new Set(prev).add(role));
+    setPermSaved(false);
+    setPermError("");
+  }
+
+  async function savePermissions() {
+    setPermError("");
+    const roles = Array.from(dirtyRoles);
+    if (roles.length === 0) return;
+
+    // Build full permissions object for each dirty role
+    const updates = roles.map((role) => {
+      const full: Record<string, boolean> = {};
+      for (const row of permMatrix) {
+        full[row.permission] = resolvedPerm(role, row.permission);
+      }
+      return { role, permissions: full };
+    });
+
+    try {
+      await Promise.all(updates.map((u) => updateRolePermMutation.mutateAsync(u)));
+      setDirtyRoles(new Set());
+      setLocalPerms({});
+      setPermSaved(true);
+      setTimeout(() => setPermSaved(false), 3000);
+    } catch {
+      setPermError("Failed to save permissions. Please try again.");
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -429,17 +444,15 @@ export default function AdminsPage() {
 
       {/* Permission Settings */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center">
-              <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-            </div>
-            <div>
-              <h2 className="font-semibold text-slate-800 text-sm">Permission Settings</h2>
-              <p className="text-xs text-slate-400 mt-0.5">Control what each role can do across the portal</p>
-            </div>
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
+          <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center">
+            <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="font-semibold text-slate-800 text-sm">Permission Settings</h2>
+            <p className="text-xs text-slate-400 mt-0.5">Control what each role can do across the portal</p>
           </div>
         </div>
 
@@ -449,53 +462,115 @@ export default function AdminsPage() {
               <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              Permissions saved.
+              Permissions saved successfully.
             </div>
           )}
 
-          <div className="grid grid-cols-[1fr_120px_120px] gap-4 mb-3 px-2">
-            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Permission</div>
-            <div className="text-xs font-semibold text-[#5A0E24] uppercase tracking-wider text-center">Manager</div>
-            <div className="text-xs font-semibold text-amber-600 uppercase tracking-wider text-center">Receptionist</div>
-          </div>
+          {permError && (
+            <div className="mb-5 flex items-center gap-2 bg-red-50 border border-red-100 text-red-600 px-4 py-3 rounded-xl text-sm">
+              <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {permError}
+              <button onClick={() => setPermError("")} className="ml-auto">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
 
-          <div className="divide-y divide-slate-50 rounded-xl border border-slate-100 overflow-hidden">
-            {PERMISSIONS.map((p) => (
-              <div key={p.key} className="grid grid-cols-[1fr_120px_120px] gap-4 items-center px-4 py-3.5 bg-white hover:bg-slate-50 transition-colors">
-                <div>
-                  <p className="text-sm font-medium text-slate-700">{p.label}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">{p.desc}</p>
-                </div>
-                {(["Manager", "Receptionist"] as const).map((role) => (
-                  <div key={role} className="flex justify-center">
-                    <button
-                      onClick={() => togglePermission(role, p.key)}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-                        permissions[role][p.key] ? (role === "Manager" ? "bg-[#5A0E24]" : "bg-amber-500") : "bg-slate-200"
-                      }`}
-                      role="switch"
-                      aria-checked={permissions[role][p.key]}
-                    >
-                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${permissions[role][p.key] ? "translate-x-6" : "translate-x-1"}`} />
-                    </button>
-                  </div>
-                ))}
+          {permLoading ? (
+            <div className="flex items-center gap-3 justify-center py-10 text-slate-400">
+              <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <span className="text-sm">Loading permissions…</span>
+            </div>
+          ) : permMatrix.length === 0 ? (
+            <p className="text-sm text-slate-400 text-center py-8">No permissions data available.</p>
+          ) : (
+            <>
+              {/* Derive role keys from API (preserves order: manager first) */}
+              {(() => {
+                const roles = permMatrix.length > 0 ? Object.keys(permMatrix[0].roles) : [];
+                const roleLabels: Record<string, { label: string; color: string }> = {
+                  manager:      { label: "Manager",      color: "text-[#5A0E24]" },
+                  receptionist: { label: "Receptionist", color: "text-amber-600" },
+                };
+                const toggleColor: Record<string, string> = {
+                  manager:      "bg-[#5A0E24]",
+                  receptionist: "bg-amber-500",
+                };
+
+                return (
+                  <>
+                    <div className={`grid gap-4 mb-3 px-2`} style={{ gridTemplateColumns: `1fr ${roles.map(() => "120px").join(" ")}` }}>
+                      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Permission</div>
+                      {roles.map((role) => (
+                        <div key={role} className={`text-xs font-semibold uppercase tracking-wider text-center ${roleLabels[role]?.color ?? "text-slate-600"}`}>
+                          {roleLabels[role]?.label ?? role}
+                          {dirtyRoles.has(role) && (
+                            <span className="ml-1 text-amber-500 text-[10px] font-bold">●</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="divide-y divide-slate-50 rounded-xl border border-slate-100 overflow-hidden">
+                      {permMatrix.map((row) => (
+                        <div
+                          key={row.permission}
+                          className="items-center px-4 py-3.5 bg-white hover:bg-slate-50 transition-colors grid gap-4"
+                          style={{ gridTemplateColumns: `1fr ${roles.map(() => "120px").join(" ")}` }}
+                        >
+                          <div>
+                            <p className="text-sm font-medium text-slate-700">{row.label}</p>
+                            <p className="text-xs text-slate-400 mt-0.5">{row.description}</p>
+                          </div>
+                          {roles.map((role) => {
+                            const on = resolvedPerm(role, row.permission);
+                            return (
+                              <div key={role} className="flex justify-center">
+                                <button
+                                  onClick={() => togglePermission(role, row.permission)}
+                                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                                    on ? (toggleColor[role] ?? "bg-slate-500") : "bg-slate-200"
+                                  }`}
+                                  role="switch"
+                                  aria-checked={on}
+                                >
+                                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${on ? "translate-x-6" : "translate-x-1"}`} />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
+
+              <p className="text-xs text-slate-400 mt-4 flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Changes apply to all users with that role across the portal.
+              </p>
+
+              <div className="mt-5 flex justify-end">
+                <button
+                  onClick={savePermissions}
+                  disabled={dirtyRoles.size === 0 || updateRolePermMutation.isPending}
+                  className="px-5 py-2.5 bg-[#5A0E24] text-white text-sm font-semibold rounded-xl hover:bg-[#921224] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {updateRolePermMutation.isPending ? "Saving…" : "Save Permissions"}
+                </button>
               </div>
-            ))}
-          </div>
-
-          <p className="text-xs text-slate-400 mt-4 flex items-center gap-1.5">
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Changes apply to all users with that role across the portal.
-          </p>
-
-          <div className="mt-5 flex justify-end">
-            <button onClick={savePermissions} className="px-5 py-2.5 bg-[#5A0E24] text-white text-sm font-semibold rounded-xl hover:bg-[#921224] transition-colors">
-              Save Permissions
-            </button>
-          </div>
+            </>
+          )}
         </div>
       </div>
 

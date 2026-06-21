@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { useCreateRoomType, useAddRoomTypeUnit, useUploadRoomTypeMedia } from "@/hooks/queries/useRoomType";
+import { useCreateRoomType, useUploadRoomTypeMedia } from "@/hooks/queries/useRoomType";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -33,20 +33,20 @@ interface FormData {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const HOTEL_CATEGORIES = [
-  "Basic",
-  "Standard",
-  "Standard Plus",
-  "Deluxe",
-  "Deluxe Suite",
-  "Executive Suite",
+  { label: "Basic",          value: "basic" },
+  { label: "Standard",       value: "standard" },
+  { label: "Standard Plus",  value: "standard_plus" },
+  { label: "Deluxe",         value: "deluxe" },
+  { label: "Deluxe Suite",   value: "deluxe_suite" },
+  { label: "Executive Suite",value: "executive_suite" },
 ];
 
 const APARTMENT_CATEGORIES = [
-  "1-Bedroom",
-  "2-Bedroom",
-  "3-Bedroom",
-  "4-Bedroom",
-  "Penthouse",
+  { label: "1-Bedroom",  value: "one_bedroom" },
+  { label: "2-Bedroom",  value: "two_bedroom" },
+  { label: "3-Bedroom",  value: "three_bedroom" },
+  { label: "4-Bedroom",  value: "four_bedroom" },
+  { label: "Penthouse",  value: "penthouse" },
 ];
 
 const PRESET_AMENITIES = [
@@ -127,6 +127,7 @@ function dataURLtoBlob(dataURL: string): Blob {
 
 function StepAbout({ data, set }: { data: FormData; set: (p: Partial<FormData>) => void }) {
   const categories = data.propertyType === "hotel" ? HOTEL_CATEGORIES : APARTMENT_CATEGORIES;
+  // category state stores the API value (e.g. "standard_plus")
   return (
     <div className="space-y-5">
       {/* Property type toggle */}
@@ -177,16 +178,16 @@ function StepAbout({ data, set }: { data: FormData; set: (p: Partial<FormData>) 
         <div className="flex flex-wrap gap-2">
           {categories.map((c) => (
             <button
-              key={c}
+              key={c.value}
               type="button"
-              onClick={() => set({ category: c })}
+              onClick={() => set({ category: c.value })}
               className={`px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-all ${
-                data.category === c
+                data.category === c.value
                   ? "bg-[#5A0E24] text-white border-[#5A0E24]"
                   : "bg-white text-slate-600 border-slate-200 hover:border-slate-400"
               }`}
             >
-              {c}
+              {c.label}
             </button>
           ))}
         </div>
@@ -759,7 +760,6 @@ export default function NewRoomPage() {
   const [submitError, setSubmitError] = useState("");
 
   const createRoomType = useCreateRoomType();
-  const addUnit = useAddRoomTypeUnit();
   const uploadMedia = useUploadRoomTypeMedia();
 
   function set(partial: Partial<FormData>) {
@@ -785,43 +785,47 @@ export default function NewRoomPage() {
     setSubmitting(true);
     setSubmitError("");
     try {
-      // 1. Create room type
-      const result = await createRoomType.mutateAsync({
+      // Build type-specific payload — units are bulk-created by the API via room_numbers / unit_labels
+      const basePayload = {
+        property_type: data.propertyType,
         name: data.name,
         category: data.category,
         description: data.roomTypeDesc,
-        property_type: data.propertyType,
-        capacity: data.capacity,
-        bedrooms: data.bedrooms,
         price_per_night: data.price,
-        bathrooms: data.bathrooms,
-        facilities: data.facilities,
-      });
+        max_guests: data.capacity,
+        features: data.facilities,
+        amenities: [] as string[],
+        facilities: [] as string[],
+        sort_order: 0,
+      };
 
+      const payload =
+        data.propertyType === "hotel"
+          ? {
+              ...basePayload,
+              room_numbers: data.roomNumbers,
+            }
+          : {
+              ...basePayload,
+              bedroom_count: data.bedrooms,
+              unit_labels: data.roomNumbers.map((n) => `Unit ${n}`),
+            };
+
+      const result = await createRoomType.mutateAsync(payload);
       const newId: string = String(result?.data?.id ?? result?.id ?? "");
 
-      // 2. Add each room number as a unit
       if (newId) {
-        for (const roomNumber of data.roomNumbers) {
-          await addUnit.mutateAsync({
-            id: newId,
-            payload: { room_number: roomNumber, status: "available" },
-          });
-        }
-
-        // 3. Upload hero image
+        // Upload hero image
         if (data.heroImage) {
           const heroFormData = new window.FormData();
-          heroFormData.append("image", dataURLtoBlob(data.heroImage), "hero.jpg");
-          heroFormData.append("type", "hero");
+          heroFormData.append("file", dataURLtoBlob(data.heroImage), "hero.jpg");
           await uploadMedia.mutateAsync({ id: newId, formData: heroFormData });
         }
 
-        // 4. Upload gallery images
+        // Upload gallery images
         for (let i = 0; i < data.galleryImages.length; i++) {
           const gFormData = new window.FormData();
-          gFormData.append("image", dataURLtoBlob(data.galleryImages[i]), `gallery-${i}.jpg`);
-          gFormData.append("type", "gallery");
+          gFormData.append("file", dataURLtoBlob(data.galleryImages[i]), `gallery-${i}.jpg`);
           await uploadMedia.mutateAsync({ id: newId, formData: gFormData });
         }
       }
@@ -942,7 +946,11 @@ export default function NewRoomPage() {
       {step > 1 && (
         <div className="bg-slate-50 rounded-xl border border-slate-100 p-4 mb-6 text-xs text-slate-500 flex flex-wrap gap-x-4 gap-y-1">
           <span><span className="font-semibold text-slate-700">{data.name || "—"}</span></span>
-          {data.category && <span className="text-[#5A0E24] font-semibold">{data.category}</span>}
+          {data.category && (
+            <span className="text-[#5A0E24] font-semibold">
+              {([...HOTEL_CATEGORIES, ...APARTMENT_CATEGORIES].find(c => c.value === data.category)?.label ?? data.category)}
+            </span>
+          )}
           {data.price > 0 && <span>₦{data.price.toLocaleString()}/night</span>}
           {data.roomNumbers.length > 0 && <span>{data.roomNumbers.length} {data.propertyType === "apartment" ? "unit" : "room"}{data.roomNumbers.length !== 1 ? "s" : ""}</span>}
           {data.bathrooms > 0 && <span>{data.bathrooms} bath</span>}

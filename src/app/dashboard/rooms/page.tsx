@@ -7,7 +7,10 @@ import {
   useRoomTypeList,
   useRoomTypeUnits,
   useUpdateRoomType,
+  useDeleteRoomType,
   useUpdateRoomTypeUnitStatus,
+  useAddRoomTypeUnit,
+  useDeleteRoomTypeUnit,
 } from "@/hooks/queries/useRoomType";
 import * as roomTypesApi from "@/services/endpoints/roomTypes";
 
@@ -284,6 +287,7 @@ export default function RoomsPage() {
         <ManageModal
           roomType={roomTypes.find((r) => r.id === managingId)!}
           onClose={() => setManagingId(null)}
+          onDeleted={() => setManagingId(null)}
         />
       )}
     </div>
@@ -292,8 +296,14 @@ export default function RoomsPage() {
 
 // ─── Manage modal ─────────────────────────────────────────────────────────────
 
-function ManageModal({ roomType, onClose }: { roomType: RoomType; onClose: () => void }) {
+function ManageModal({ roomType, onClose, onDeleted }: { roomType: RoomType; onClose: () => void; onDeleted: () => void }) {
   const [tab, setTab] = useState<"units" | "edit">("units");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const deleteRoomType = useDeleteRoomType();
+
+  function handleDeleteRoomType() {
+    deleteRoomType.mutate(String(roomType.id), { onSuccess: onDeleted });
+  }
 
   return (
     <div
@@ -309,11 +319,35 @@ function ManageModal({ roomType, onClose }: { roomType: RoomType; onClose: () =>
             <h3 className="font-black text-slate-800 text-lg uppercase tracking-wide">{roomType.name}</h3>
             <p className="text-xs text-slate-400 mt-0.5">{categoryLabel(roomType.category)}</p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-2">
+            {confirmDelete ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-red-500 font-semibold">Delete room type?</span>
+                <button
+                  onClick={handleDeleteRoomType}
+                  disabled={deleteRoomType.isPending}
+                  className="px-3 py-1 text-xs font-semibold bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50"
+                >
+                  {deleteRoomType.isPending ? "Deleting…" : "Yes, delete"}
+                </button>
+                <button onClick={() => setConfirmDelete(false)} className="px-3 py-1 text-xs font-semibold bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(true)}
+                className="px-3 py-1 text-xs font-semibold bg-red-50 text-red-500 rounded-lg hover:bg-red-100 transition-colors"
+              >
+                Delete
+              </button>
+            )}
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div className="flex border-b border-slate-100 px-6">
@@ -377,18 +411,31 @@ const STATUS_COLORS: Record<string, { chip: string; row: string; btn: string }> 
 function UnitsTab({ roomTypeId }: { roomTypeId: string }) {
   const { data, isLoading, isError } = useRoomTypeUnits(roomTypeId);
   const updateStatus = useUpdateRoomTypeUnitStatus();
+  const addUnit = useAddRoomTypeUnit();
+  const deleteUnit = useDeleteRoomTypeUnit();
   const units: RoomUnit[] = unitsFromResponse(data);
+
+  const [newRoomNumber, setNewRoomNumber] = useState("");
+  const [addError, setAddError] = useState("");
 
   const available = units.filter((u) => u.status?.value === "available").length;
 
   function cycleStatus(unit: RoomUnit) {
     const current = unit.status?.value ?? "available";
     const next: UnitStatus = STATUS_CYCLE[current] ?? "available";
-    updateStatus.mutate({
-      id: roomTypeId,
-      unitId: String(unit.id),
-      payload: { status: next },
-    });
+    updateStatus.mutate({ id: roomTypeId, unitId: String(unit.id), payload: { status: next } });
+  }
+
+  function handleAddUnit(e: React.FormEvent) {
+    e.preventDefault();
+    const rn = newRoomNumber.trim();
+    if (!rn) return;
+    if (units.some((u) => u.room_number === rn)) { setAddError("Room number already exists."); return; }
+    setAddError("");
+    addUnit.mutate(
+      { id: roomTypeId, payload: { room_number: rn, status: "available" } },
+      { onSuccess: () => setNewRoomNumber("") }
+    );
   }
 
   if (isLoading) {
@@ -404,68 +451,104 @@ function UnitsTab({ roomTypeId }: { roomTypeId: string }) {
   }
 
   if (isError) return <p className="text-center py-10 text-red-500 text-sm">Failed to load units.</p>;
-  if (units.length === 0) return <p className="text-center py-10 text-slate-400 text-sm">No units found for this room type.</p>;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-          {units.length} unit{units.length !== 1 ? "s" : ""}
-        </p>
-        <span className="text-xs text-slate-400">{available} of {units.length} available</span>
-      </div>
+      {/* Add unit form */}
+      <form onSubmit={handleAddUnit} className="flex gap-2">
+        <input
+          value={newRoomNumber}
+          onChange={(e) => { setNewRoomNumber(e.target.value); setAddError(""); }}
+          placeholder="Room number, e.g. 401"
+          className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#5A0E24]/20 focus:border-[#5A0E24]"
+        />
+        <button
+          type="submit"
+          disabled={!newRoomNumber.trim() || addUnit.isPending}
+          className="px-4 py-2 text-xs font-semibold bg-[#5A0E24] text-white rounded-xl hover:bg-[#921224] disabled:opacity-40 transition-colors shrink-0"
+        >
+          {addUnit.isPending ? "Adding…" : "+ Add Room"}
+        </button>
+      </form>
+      {addError && <p className="text-xs text-red-500">{addError}</p>}
+      {addUnit.isError && <p className="text-xs text-red-500">Failed to add room. Please try again.</p>}
 
-      {/* Chip overview */}
-      <div className="flex flex-wrap gap-1.5">
-        {units.map((u) => {
-          const v = u.status?.value ?? "available";
-          const colors = STATUS_COLORS[v] ?? STATUS_COLORS.available;
-          return (
-            <button
-              key={u.id}
-              onClick={() => cycleStatus(u)}
-              disabled={updateStatus.isPending}
-              title={`${u.room_number} — ${STATUS_LABEL[v]}. Click to toggle.`}
-              className={`px-2.5 py-1 text-xs font-mono font-bold rounded-lg border-2 transition-all disabled:opacity-50 ${colors.chip}`}
-            >
-              {u.room_number}
-            </button>
-          );
-        })}
-      </div>
-      <p className="text-[10px] text-slate-400">Tap a room to cycle: available → occupied → available</p>
+      {units.length === 0 ? (
+        <p className="text-center py-8 text-slate-400 text-sm">No units yet. Add one above.</p>
+      ) : (
+        <>
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+              {units.length} unit{units.length !== 1 ? "s" : ""}
+            </p>
+            <span className="text-xs text-slate-400">{available} of {units.length} available</span>
+          </div>
 
-      {/* Detail rows */}
-      <div className="space-y-2 pt-2">
-        {units.map((u) => {
-          const v = u.status?.value ?? "available";
-          const colors = STATUS_COLORS[v] ?? STATUS_COLORS.available;
-          const unavailable = isUnavailable(u);
-          return (
-            <div key={u.id} className={`rounded-xl border-2 p-3 transition-all ${colors.row}`}>
-              <div className="flex items-center justify-between">
-                <span className="font-mono font-bold text-slate-700 text-sm">Room {u.room_number}</span>
+          {/* Chip overview */}
+          <div className="flex flex-wrap gap-1.5">
+            {units.map((u) => {
+              const v = u.status?.value ?? "available";
+              const colors = STATUS_COLORS[v] ?? STATUS_COLORS.available;
+              return (
                 <button
-                  type="button"
-                  disabled={updateStatus.isPending}
+                  key={u.id}
                   onClick={() => cycleStatus(u)}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 ${colors.btn}`}
+                  disabled={updateStatus.isPending}
+                  title={`${u.room_number} — ${STATUS_LABEL[v]}. Click to toggle.`}
+                  className={`px-2.5 py-1 text-xs font-mono font-bold rounded-lg border-2 transition-all disabled:opacity-50 ${colors.chip}`}
                 >
-                  <div className={`w-1.5 h-1.5 rounded-full ${v === "available" ? "bg-green-500" : v === "maintenance" ? "bg-orange-500" : "bg-red-500"}`} />
-
-                  {STATUS_LABEL[v]} — click to{unavailable ? " release" : " occupy"}
+                  {u.room_number}
                 </button>
-              </div>
-              {unavailable && (u.check_in_date || u.check_out_date) && (
-                <div className="flex gap-4 mt-2 text-xs text-slate-500">
-                  {u.check_in_date && <span>Check-in: <span className="font-medium text-slate-700">{u.check_in_date}</span></span>}
-                  {u.check_out_date && <span>Check-out: <span className="font-medium text-slate-700">{u.check_out_date}</span></span>}
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-slate-400">Tap a room to cycle: available → occupied → available</p>
+
+          {/* Detail rows */}
+          <div className="space-y-2 pt-2">
+            {units.map((u) => {
+              const v = u.status?.value ?? "available";
+              const colors = STATUS_COLORS[v] ?? STATUS_COLORS.available;
+              const unavailable = isUnavailable(u);
+              return (
+                <div key={u.id} className={`rounded-xl border-2 p-3 transition-all ${colors.row}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono font-bold text-slate-700 text-sm">Room {u.room_number}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        disabled={updateStatus.isPending}
+                        onClick={() => cycleStatus(u)}
+                        className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 ${colors.btn}`}
+                      >
+                        <div className={`w-1.5 h-1.5 rounded-full ${v === "available" ? "bg-green-500" : v === "maintenance" ? "bg-orange-500" : "bg-red-500"}`} />
+                        {STATUS_LABEL[v]}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={deleteUnit.isPending}
+                        onClick={() => deleteUnit.mutate({ id: roomTypeId, unitId: String(u.id) })}
+                        className="p-1 text-slate-300 hover:text-red-500 disabled:opacity-40 transition-colors"
+                        title="Delete unit"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  {unavailable && (u.check_in_date || u.check_out_date) && (
+                    <div className="flex gap-4 mt-2 text-xs text-slate-500">
+                      {u.check_in_date && <span>Check-in: <span className="font-medium text-slate-700">{u.check_in_date}</span></span>}
+                      {u.check_out_date && <span>Check-out: <span className="font-medium text-slate-700">{u.check_out_date}</span></span>}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </div>
   );
 }
