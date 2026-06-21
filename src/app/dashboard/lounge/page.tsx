@@ -125,10 +125,6 @@ export default function LoungePage() {
 
   const barId = selectedBarId || (bars[0]?.id ? String(bars[0].id) : "");
 
-  useEffect(() => {
-    if (!selectedBarId && bars.length > 0) setSelectedBarId(String(bars[0].id));
-  }, [bars, selectedBarId]);
-
   const { data: menuRaw, isLoading: menuLoading, isError: menuError } = useMenuItemList(barId);
   const allItems: MenuItem[] = menuItemsFromResponse(menuRaw);
 
