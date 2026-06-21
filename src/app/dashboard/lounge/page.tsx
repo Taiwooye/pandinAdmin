@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { useBarList } from "@/hooks/queries/useBar";
 import { useMenuItemList, useAddMenuItem, useUpdateMenuItem, useDeleteMenuItem } from "@/hooks/queries/useMenuItem";
 
@@ -22,6 +22,8 @@ type MenuItem = {
   category?: string | { value: string; label: string };
   image_url?: string;
   image?: string;
+  is_available?: boolean;
+  sort_order?: number;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
