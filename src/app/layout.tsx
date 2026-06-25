@@ -8,8 +8,14 @@ import { QueryProvider } from "@/providers/QueryProvider";
 const geist = Geist({ variable: "--font-geist", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "PaNDiN Admin",
+  title: {
+    default: "PaNDiN Admin",
+    template: "%s | PaNDiN Admin",
+  },
   description: "PaNDiN Group admin portal",
+  icons: {
+    icon: "/icon.svg",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

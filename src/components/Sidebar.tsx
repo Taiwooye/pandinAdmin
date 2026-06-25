@@ -27,14 +27,14 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="px-6 py-5 border-b border-slate-800">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-[#5A0E24] flex items-center justify-center shrink-0">
-            <svg viewBox="0 0 24 24" fill="none" className="w-4 h-4 text-white" stroke="currentColor" strokeWidth={2}>
+          <div className="w-9 h-9 rounded-lg bg-[#5A0E24] flex items-center justify-center shrink-0">
+            <svg viewBox="0 0 24 24" fill="none" className="w-5 h-5 text-white" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 21V7a2 2 0 012-2h14a2 2 0 012 2v14M9 21V12h6v9M3 10h18" />
             </svg>
           </div>
           <div className="leading-none">
-            <span className="text-sm font-bold text-white">PaNDiN</span>
-            <span className="text-xs text-slate-400 block">Admin Portal</span>
+            <span className="text-lg font-bold text-white tracking-tight">PaNDiN</span>
+            <span className="text-lg font-bold text-slate-300 tracking-tight"> Group</span>
           </div>
         </div>
       </div>
