@@ -28,7 +28,9 @@ export async function remove(id: string) {
 }
 
 export async function uploadMedia(id: string, formData: FormData) {
-  const { data } = await apiClient.post(`${BASE_PATH}/${id}/media`, formData);
+  const { data } = await apiClient.post(`${BASE_PATH}/${id}/media`, formData, {
+    headers: { "Content-Type": undefined },
+  });
   return data;
 }
 

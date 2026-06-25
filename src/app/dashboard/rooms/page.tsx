@@ -283,7 +283,7 @@ export default function RoomsPage() {
       )}
 
       {/* Manage modal */}
-      {managingId !== null && (
+      {managingId !== null && roomTypes.find((r) => r.id === managingId) && (
         <ManageModal
           roomType={roomTypes.find((r) => r.id === managingId)!}
           onClose={() => setManagingId(null)}

@@ -58,9 +58,12 @@ function siteStatsFromResponse(raw: unknown): SiteStat[] {
   return [];
 }
 
+export type EarningsPeriod = "7days" | "30days" | "3months" | "12months";
+
 export default function DashboardPage() {
   const [search, setSearch] = useState("");
-  const { data, isLoading, isError } = useDashboard();
+  const [earningsPeriod, setEarningsPeriod] = useState<EarningsPeriod>("12months");
+  const { data, isLoading, isError } = useDashboard({ period: earningsPeriod });
   const { data: siteStatsRaw, isLoading: siteStatsLoading } = useSiteStatsList();
   const overview = data?.data;
 
@@ -180,7 +183,13 @@ export default function DashboardPage() {
           </div>
 
           {/* Earnings bar chart */}
-          {overview.earnings && <EarningsChart earnings={overview.earnings} />}
+          {overview.earnings && (
+            <EarningsChart
+              earnings={overview.earnings}
+              period={earningsPeriod}
+              onPeriodChange={setEarningsPeriod}
+            />
+          )}
 
           {/* Occupancy donut + service split */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">

@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import * as dashboardApi from "@/services/endpoints/dashboard";
 
-export function useDashboard() {
+export function useDashboard(params?: Record<string, unknown>) {
   return useQuery({
-    queryKey: ["dashboard"],
-    queryFn: () => dashboardApi.getOverview(),
+    queryKey: ["dashboard", params],
+    queryFn: () => dashboardApi.getOverview(params),
   });
 }
