@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { useBarList } from "@/hooks/queries/useBar";
 import { useMenuItemList, useAddMenuItem, useUpdateMenuItem, useDeleteMenuItem } from "@/hooks/queries/useMenuItem";
 
@@ -22,6 +22,8 @@ type MenuItem = {
   category?: string | { value: string; label: string };
   image_url?: string;
   image?: string;
+  is_available?: boolean;
+  sort_order?: number;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -124,10 +126,6 @@ export default function LoungePage() {
   const bars: Bar[] = barsFromResponse(barsRaw);
 
   const barId = selectedBarId || (bars[0]?.id ? String(bars[0].id) : "");
-
-  useEffect(() => {
-    if (!selectedBarId && bars.length > 0) setSelectedBarId(String(bars[0].id));
-  }, [bars, selectedBarId]);
 
   const { data: menuRaw, isLoading: menuLoading, isError: menuError } = useMenuItemList(barId);
   const allItems: MenuItem[] = menuItemsFromResponse(menuRaw);

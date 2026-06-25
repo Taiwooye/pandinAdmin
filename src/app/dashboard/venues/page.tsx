@@ -327,7 +327,7 @@ export default function VenuesPage() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 21V6.75A2.25 2.25 0 016 4.5h12a2.25 2.25 0 012.25 2.25V21M3.75 21H2.25m1.5 0h16.5m0 0H21m-1.5 0V6.75M6.75 9h10.5M6.75 12h10.5M6.75 15h6" />
           </svg>
           <p className="font-semibold">No venues yet.</p>
-          <p className="text-xs mt-1">Click "Add Venue" to list your first event space.</p>
+          <p className="text-xs mt-1">Click &quot;Add Venue&quot; to list your first event space.</p>
         </div>
       )}
 
@@ -526,7 +526,7 @@ export default function VenuesPage() {
               {/* Size */}
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                  Size / Area <span className="text-slate-400 font-normal">(optional, e.g. "800 m²")</span>
+                  Size / Area <span className="text-slate-400 font-normal">(optional, e.g. &quot;800 m²&quot;)</span>
                 </label>
                 <input
                   value={form.size}
@@ -598,7 +598,7 @@ export default function VenuesPage() {
             </div>
             <h3 className="text-base font-bold text-slate-800 text-center mb-1">Delete Venue?</h3>
             <p className="text-sm text-slate-500 text-center mb-6">
-              <span className="font-semibold text-slate-700">"{venueName(deleteTarget)}"</span> will be permanently removed along with all its photos.
+              <span className="font-semibold text-slate-700">&quot;{venueName(deleteTarget)}&quot;</span> will be permanently removed along with all its photos.
             </p>
             <div className="flex gap-3">
               <button

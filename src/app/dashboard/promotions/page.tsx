@@ -523,7 +523,7 @@ export default function PromotionsPage() {
               Delete {deleteTarget.section === "promotion" ? "Promotion" : "Program"}?
             </h3>
             <p className="text-sm text-slate-500 mb-6">
-              <span className="font-semibold text-slate-700">"{deleteTarget.name}"</span> will be permanently removed.
+              <span className="font-semibold text-slate-700">&quot;{deleteTarget.name}&quot;</span> will be permanently removed.
             </p>
             <div className="flex gap-3">
               <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2.5 text-sm font-semibold text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors">Cancel</button>

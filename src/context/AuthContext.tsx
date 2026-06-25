@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as authApi from "@/services/endpoints/auth";
 import { TOKEN_KEY } from "@/services/apiClient";
@@ -15,14 +15,11 @@ type AuthContextType = {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [initialized, setInitialized] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(() =>
+    typeof window !== "undefined" ? !!localStorage.getItem(TOKEN_KEY) : false
+  );
+  const [initialized] = useState(() => typeof window !== "undefined");
   const router = useRouter();
-
-  useEffect(() => {
-    setIsAuthenticated(!!localStorage.getItem(TOKEN_KEY));
-    setInitialized(true);
-  }, []);
 
   async function login(email: string, password: string) {
     try {
