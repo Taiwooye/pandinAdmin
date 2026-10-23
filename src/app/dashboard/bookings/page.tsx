@@ -1,14 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useBooking, useBookingList, useUpdateBooking } from "@/hooks/queries/useBooking";
+import { useRoomTypeList } from "@/hooks/queries/useRoomType";
+import { useVenueList } from "@/hooks/queries/useVenue";
+import { useBarList } from "@/hooks/queries/useBar";
 
-type BookingListItem = {
+type Booking = {
   id: number;
   booking_ref: string;
   guest_name: string;
   guest_email: string;
-  guest_phone: string;
+  guest_phone: string | null;
   service_type: { value: string; label: string };
   room_type_id: number | null;
   venue_id: number | null;
@@ -19,7 +22,7 @@ type BookingListItem = {
   event_type: string | null;
   reservation_date: string | null;
   reservation_time: string | null;
-  num_guests: number;
+  num_guests: number | null;
   message: string | null;
   status: { value: string; label: string };
   payment_status: { value: string; label: string };
@@ -27,590 +30,620 @@ type BookingListItem = {
   created_at: string;
 };
 
-type BookingDetail = BookingListItem & {
-  room_type_name?: string | null;
-  venue_name?: string | null;
-  bar_venue_name?: string | null;
-};
+type Named = { id: number; name?: string; title?: string };
 
-const STATUS_OPTIONS = [
-  { value: "", label: "All" },
-  { value: "awaiting", label: "Awaiting" },
-  { value: "verified", label: "Verified" },
-  { value: "cancelled", label: "Cancelled" },
+// ─── Plain-language labels ────────────────────────────────────────────────────
+
+const TABS = [
+  { value: "awaiting", label: "Needs attention", hint: "New bookings waiting for you" },
+  { value: "verified", label: "Confirmed", hint: "Bookings you have confirmed" },
+  { value: "cancelled", label: "Cancelled", hint: "Cancelled bookings" },
+  { value: "", label: "All", hint: "Every booking" },
 ];
 
-const PAYMENT_OPTIONS = [
-  { value: "", label: "All" },
-  { value: "pending", label: "Pending" },
-  { value: "verified", label: "Verified" },
+const STATUS_TEXT: Record<string, { label: string; className: string }> = {
+  awaiting: { label: "New – waiting for you", className: "bg-amber-100 text-amber-800" },
+  verified: { label: "Confirmed", className: "bg-green-100 text-green-800" },
+  cancelled: { label: "Cancelled", className: "bg-slate-200 text-slate-600" },
+};
+
+const PAYMENT_TEXT: Record<string, { label: string; className: string }> = {
+  pending: { label: "Not paid yet", className: "bg-orange-50 text-orange-700 border border-orange-200" },
+  verified: { label: "Paid", className: "bg-emerald-50 text-emerald-700 border border-emerald-200" },
+};
+
+const SERVICES = [
+  { value: "", label: "All services" },
+  { value: "hotel", label: "Hotel room", icon: "🏨" },
+  { value: "apartment", label: "Apartment", icon: "🏠" },
+  { value: "event_hall", label: "Event hall", icon: "🎉" },
+  { value: "lounge_bar", label: "Lounge & bar", icon: "🍸" },
+  { value: "general", label: "General enquiry", icon: "💬" },
 ];
 
-const SERVICE_OPTIONS = [
-  { value: "", label: "All" },
-  { value: "hotel", label: "Hotel" },
-  { value: "apartment", label: "Apartment" },
-  { value: "event_hall", label: "Event Hall" },
-  { value: "lounge_bar", label: "Lounge & Bar" },
-];
+const serviceIcon = (value: string) => SERVICES.find((s) => s.value === value)?.icon ?? "📋";
 
-const statusBadge: Record<string, string> = {
-  awaiting: "bg-amber-100 text-amber-700 border border-amber-200",
-  verified: "bg-green-100 text-green-700 border border-green-200",
-  cancelled: "bg-slate-100 text-slate-500 border border-slate-200",
-};
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const paymentBadge: Record<string, string> = {
-  pending: "bg-orange-50 text-orange-600 border border-orange-100",
-  verified: "bg-emerald-50 text-emerald-700 border border-emerald-100",
-};
-
-const serviceIcon: Record<string, string> = {
-  hotel: "🏨",
-  apartment: "🏠",
-  event_hall: "🎪",
-  lounge_bar: "🍸",
-};
-
-function venueLabel(b: BookingListItem | BookingDetail) {
-  const d = b as BookingDetail;
-  return d.room_type_name ?? d.venue_name ?? d.bar_venue_name ?? "—";
+function formatDate(date: string | null): string {
+  if (!date) return "";
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
 
-function relevantDate(b: BookingListItem) {
-  return b.check_in_date ?? b.event_date ?? b.reservation_date ?? "—";
+function nightsBetween(from: string, to: string): number {
+  const [y1, m1, d1] = from.split("-").map(Number);
+  const [y2, m2, d2] = to.split("-").map(Number);
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
 }
 
-function FilterPill({
-  label,
-  active,
-  onClick,
-  activeClass,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-  activeClass: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-        active
-          ? `${activeClass} shadow-sm`
-          : "bg-slate-50 border border-slate-200 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-      }`}
-    >
-      {label}
-    </button>
-  );
+function whenText(b: Booking): string {
+  if (b.check_in_date && b.check_out_date) {
+    const n = nightsBetween(b.check_in_date, b.check_out_date);
+    return `${formatDate(b.check_in_date)} → ${formatDate(b.check_out_date)} · ${n} night${n === 1 ? "" : "s"}`;
+  }
+  if (b.event_date) return `${formatDate(b.event_date)}${b.event_type ? ` · ${b.event_type}` : ""}`;
+  if (b.reservation_date) return `${formatDate(b.reservation_date)}${b.reservation_time ? ` at ${b.reservation_time.slice(0, 5)}` : ""}`;
+  return "";
 }
+
+function timeAgo(iso: string): string {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
+  return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function phoneDigits(phone: string | null): string {
+  return (phone ?? "").replace(/[^\d]/g, "");
+}
+
+function listFrom(raw: unknown): Named[] {
+  const d = (raw as { data?: unknown })?.data ?? raw;
+  return Array.isArray(d) ? (d as Named[]) : [];
+}
+
+function errorMessage(err: unknown): string {
+  const res = (err as { response?: { status?: number; data?: { message?: string } } })?.response;
+  if (res?.status === 403) return "You don't have permission to do this. Ask a manager.";
+  return res?.data?.message ?? "Something went wrong. Please try again.";
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function BookingsPage() {
-  const [status, setStatus] = useState("");
-  const [paymentStatus, setPaymentStatus] = useState("");
-  const [serviceType, setServiceType] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [page, setPage] = useState(1);
+  const [tab, setTab] = useState("awaiting");
+  const [service, setService] = useState("");
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  // Wait until typing pauses before searching
+  useEffect(() => {
+    const id = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(id);
+  }, [searchInput]);
 
   const params = useMemo(() => {
     const p: Record<string, string | number> = { page };
-    if (status) p.status = status;
-    if (paymentStatus) p.payment_status = paymentStatus;
-    if (serviceType) p.service_type = serviceType;
-    if (dateFrom) p.date_from = dateFrom;
-    if (dateTo) p.date_to = dateTo;
+    if (tab) p.status = tab;
+    if (service) p.service_type = service;
+    if (search) {
+      if (/^pnd-/i.test(search)) p.booking_ref = search;
+      else p.guest_name = search;
+    }
     return p;
-  }, [page, status, paymentStatus, serviceType, dateFrom, dateTo]);
+  }, [page, tab, service, search]);
 
   const { data, isLoading, isError } = useBookingList(params);
-  const bookingsData = data?.data;
+  const bookings: Booking[] = data?.data ?? [];
   const meta = data?.meta;
 
-  function updateFilter(setter: (v: string) => void, value: string) {
-    setter(value);
+  // Tab counts
+  const awaitingCount = useBookingList({ status: "awaiting" }).data?.meta?.total;
+  const verifiedCount = useBookingList({ status: "verified" }).data?.meta?.total;
+  const cancelledCount = useBookingList({ status: "cancelled" }).data?.meta?.total;
+  const allCount = useBookingList({}).data?.meta?.total;
+  const counts: Record<string, number | undefined> = {
+    awaiting: awaitingCount,
+    verified: verifiedCount,
+    cancelled: cancelledCount,
+    "": allCount,
+  };
+
+  // Names for room types, venues and lounges (the bookings API only returns ids)
+  const roomTypes = listFrom(useRoomTypeList().data);
+  const venues = listFrom(useVenueList().data);
+  const bars = listFrom(useBarList().data);
+  const placeName = (b: Booking): string => {
+    const find = (list: Named[], id: number | null) => {
+      const item = id ? list.find((x) => x.id === id) : undefined;
+      return item?.name ?? item?.title ?? "";
+    };
+    return find(roomTypes, b.room_type_id) || find(venues, b.venue_id) || find(bars, b.bar_venue_id);
+  };
+
+  const changeTab = (value: string) => {
+    setTab(value);
     setPage(1);
-  }
+  };
 
-  const filtered = useMemo(() => {
-    const list: BookingListItem[] = bookingsData ?? [];
-    const q = search.toLowerCase().trim();
-    if (!q) return list;
-    return list.filter(
-      (b) =>
-        b.guest_name?.toLowerCase().includes(q) ||
-        b.guest_email?.toLowerCase().includes(q) ||
-        b.guest_phone?.includes(q) ||
-        b.booking_ref?.toLowerCase().includes(q)
-    );
-  }, [search, bookingsData]);
-
-  const activeFilterCount = [status, paymentStatus, serviceType, dateFrom, dateTo].filter(Boolean).length;
-
-  const { data: detailData, isLoading: detailLoading } = useBooking(selectedId ? String(selectedId) : "");
-  const detail: BookingDetail | undefined = detailData?.data;
-  const updateBooking = useUpdateBooking();
-
-  function handleSave(payload: { status: string; payment_status: string; admin_notes: string }) {
-    if (!selectedId) return;
-    updateBooking.mutate({ id: String(selectedId), payload }, { onSuccess: () => setSelectedId(null) });
-  }
-
-  function clearAllFilters() {
-    setStatus("");
-    setPaymentStatus("");
-    setServiceType("");
-    setDateFrom("");
-    setDateTo("");
-    setPage(1);
-  }
+  const activeTab = TABS.find((t) => t.value === tab)!;
 
   return (
-    <div className="max-w-[1400px]">
-      {/* Page header */}
-      <div className="flex items-start justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Booking Log</h1>
-          <p className="text-slate-500 text-sm mt-1">
-            Verify bank transfers before marking payment as verified. Cancellations notify the guest by email.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-sm">
-          <span className="text-slate-400 text-sm">Total bookings</span>
-          <span className="text-lg font-bold text-slate-800">{meta?.total ?? "—"}</span>
-        </div>
+    <div className="max-w-6xl">
+      {/* Header */}
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-slate-800">Bookings</h1>
+        <p className="text-slate-500 text-sm mt-1">
+          Bookings and enquiries from the website. Call the guest, check their payment, then confirm the booking.
+        </p>
       </div>
 
-      {/* Filter panel */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm mb-6 overflow-hidden">
-        {/* Panel header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 bg-slate-50/60">
-          <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z" />
-            </svg>
-            <span className="text-sm font-semibold text-slate-600">Filters</span>
-            {activeFilterCount > 0 && (
-              <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-[#5A0E24] text-white text-[10px] font-bold">
-                {activeFilterCount}
-              </span>
-            )}
-          </div>
-          {activeFilterCount > 0 && (
-            <button onClick={clearAllFilters} className="text-xs font-semibold text-[#5A0E24] hover:text-[#7a1230] transition-colors">
-              Clear all
+      {/* Tabs */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+        {TABS.map((t) => {
+          const active = tab === t.value;
+          const urgent = t.value === "awaiting" && (counts.awaiting ?? 0) > 0;
+          return (
+            <button
+              key={t.label}
+              onClick={() => changeTab(t.value)}
+              className={`text-left rounded-2xl border-2 px-4 py-3.5 transition-all ${
+                active ? "border-[#5A0E24] bg-[#5A0E24] text-white shadow-md" : "border-slate-200 bg-white hover:border-slate-300"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className={`text-sm font-semibold ${active ? "text-white" : "text-slate-700"}`}>{t.label}</span>
+                {urgent && !active && <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />}
+              </div>
+              <div className={`text-3xl font-bold mt-1 ${active ? "text-white" : urgent ? "text-amber-600" : "text-slate-800"}`}>
+                {counts[t.value] ?? "–"}
+              </div>
             </button>
-          )}
-        </div>
-
-        <div className="divide-y divide-slate-100">
-          {/* Booking status */}
-          <div className="flex items-start gap-6 px-5 py-4">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider pt-1.5 w-28 shrink-0">
-              Booking status
-            </span>
-            <div className="flex gap-2 flex-wrap">
-              {STATUS_OPTIONS.map((o) => (
-                <FilterPill
-                  key={o.value}
-                  label={o.label}
-                  active={status === o.value}
-                  onClick={() => updateFilter(setStatus, o.value)}
-                  activeClass="bg-[#5A0E24] text-white border border-[#5A0E24]"
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Payment status */}
-          <div className="flex items-start gap-6 px-5 py-4">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider pt-1.5 w-28 shrink-0">
-              Payment
-            </span>
-            <div className="flex gap-2 flex-wrap">
-              {PAYMENT_OPTIONS.map((o) => (
-                <FilterPill
-                  key={o.value}
-                  label={o.label}
-                  active={paymentStatus === o.value}
-                  onClick={() => updateFilter(setPaymentStatus, o.value)}
-                  activeClass="bg-emerald-700 text-white border border-emerald-700"
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Service type */}
-          <div className="flex items-start gap-6 px-5 py-4">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider pt-1.5 w-28 shrink-0">
-              Service
-            </span>
-            <div className="flex gap-2 flex-wrap">
-              {SERVICE_OPTIONS.map((o) => (
-                <FilterPill
-                  key={o.value}
-                  label={o.label}
-                  active={serviceType === o.value}
-                  onClick={() => updateFilter(setServiceType, o.value)}
-                  activeClass="bg-amber-600 text-white border border-amber-600"
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Date range */}
-          <div className="flex items-center gap-6 px-5 py-4">
-            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider w-28 shrink-0">
-              Date range
-            </span>
-            <div className="flex items-center gap-3 flex-wrap">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500 font-medium">From</span>
-                <input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => updateFilter(setDateFrom, e.target.value)}
-                  className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500 font-medium">To</span>
-                <input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => updateFilter(setDateTo, e.target.value)}
-                  className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent"
-                />
-              </div>
-              {(dateFrom || dateTo) && (
-                <button
-                  onClick={() => { updateFilter(setDateFrom, ""); updateFilter(setDateTo, ""); }}
-                  className="text-xs text-slate-400 hover:text-slate-600 transition-colors"
-                >
-                  ✕ Clear dates
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+          );
+        })}
       </div>
 
-      {/* Search + result count row */}
-      <div className="flex items-center gap-3 mb-4">
-        <div className="relative flex-1 max-w-md">
-          <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      {/* Search + service */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-5">
+        <div className="relative flex-1">
+          <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
           <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name, email, phone, or ref…"
-            className="w-full pl-9 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent placeholder:text-slate-400"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search guest name or booking reference (e.g. PND-AB12)"
+            className="w-full pl-11 pr-10 py-3 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#5A0E24]/30 focus:border-[#5A0E24]"
           />
-          {search && (
-            <button onClick={() => setSearch("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
+          {searchInput && (
+            <button
+              onClick={() => setSearchInput("")}
+              aria-label="Clear search"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            >
+              ✕
             </button>
           )}
         </div>
-        {!isLoading && (
-          <span className="text-sm text-slate-500">
-            <span className="font-semibold text-slate-700">{search ? filtered.length : (meta?.total ?? 0)}</span>
-            {search ? " results on this page" : " bookings"}
-          </span>
-        )}
+        <select
+          value={service}
+          onChange={(e) => {
+            setService(e.target.value);
+            setPage(1);
+          }}
+          className="sm:w-56 px-3 py-3 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#5A0E24]/30 focus:border-[#5A0E24]"
+        >
+          {SERVICES.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.icon ? `${s.icon}  ` : ""}{s.label}
+            </option>
+          ))}
+        </select>
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[820px]">
-            <thead>
-              <tr className="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
-                <th className="text-left px-5 py-3.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Ref</th>
-                <th className="text-left px-5 py-3.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Guest</th>
-                <th className="text-left px-5 py-3.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Service</th>
-                <th className="text-left px-5 py-3.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Room / Venue</th>
-                <th className="text-left px-5 py-3.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Date</th>
-                <th className="text-left px-5 py-3.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Guests</th>
-                <th className="text-left px-5 py-3.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Status</th>
-                <th className="text-left px-5 py-3.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Payment</th>
-                <th className="px-5 py-3.5" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {isLoading && (
-                <tr>
-                  <td colSpan={9} className="px-5 py-16 text-center">
-                    <div className="flex flex-col items-center gap-2 text-slate-400">
-                      <svg className="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      <span className="text-sm">Loading bookings…</span>
-                    </div>
-                  </td>
-                </tr>
-              )}
-              {isError && (
-                <tr>
-                  <td colSpan={9} className="px-5 py-16 text-center text-red-500 text-sm">
-                    Failed to load bookings. Please try again.
-                  </td>
-                </tr>
-              )}
-              {!isLoading && !isError && filtered.map((b) => (
-                <tr
-                  key={b.id}
-                  className="hover:bg-amber-50/40 transition-colors group cursor-pointer"
-                  onClick={() => setSelectedId(b.id)}
-                >
-                  <td className="px-5 py-3.5 font-mono text-xs text-slate-400 font-medium">{b.booking_ref}</td>
-                  <td className="px-5 py-3.5">
-                    <p className="font-semibold text-slate-800 leading-snug">{b.guest_name}</p>
-                    <p className="text-xs text-slate-400 mt-0.5">{b.guest_email}</p>
-                  </td>
-                  <td className="px-5 py-3.5">
-                    <span className="inline-flex items-center gap-1.5 text-slate-600 text-xs font-medium bg-slate-50 border border-slate-100 px-2.5 py-1 rounded-md">
-                      <span>{serviceIcon[b.service_type?.value] ?? "📋"}</span>
-                      {b.service_type?.label}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5 text-slate-600 text-sm max-w-[140px] truncate">{venueLabel(b)}</td>
-                  <td className="px-5 py-3.5 text-slate-600 text-sm tabular-nums">{relevantDate(b)}</td>
-                  <td className="px-5 py-3.5 text-slate-600 text-sm">{b.num_guests}</td>
-                  <td className="px-5 py-3.5">
-                    <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${statusBadge[b.status?.value] ?? "bg-slate-100 text-slate-500"}`}>
-                      {b.status?.label}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5">
-                    <span className={`inline-flex px-2.5 py-1 rounded-md text-xs font-semibold ${paymentBadge[b.payment_status?.value] ?? "bg-slate-100 text-slate-500"}`}>
-                      {b.payment_status?.label}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3.5">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setSelectedId(b.id); }}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 opacity-0 group-hover:opacity-100 transition-all shadow-sm"
-                    >
-                      Edit
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {!isLoading && !isError && filtered.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="px-5 py-16 text-center">
-                    <div className="flex flex-col items-center gap-2 text-slate-400">
-                      <svg className="w-8 h-8 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                      </svg>
-                      <span className="text-sm">No bookings match your filters.</span>
-                      {activeFilterCount > 0 && (
-                        <button onClick={clearAllFilters} className="text-xs font-semibold text-[#5A0E24] hover:underline mt-1">
-                          Clear filters
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Pagination */}
-        {meta && meta.last_page > 1 && (
-          <div className="flex items-center justify-between px-5 py-3.5 border-t border-slate-100 bg-slate-50/40">
-            <span className="text-xs text-slate-500">
-              Showing <span className="font-semibold text-slate-700">{meta.from ?? 0}–{meta.to ?? 0}</span> of <span className="font-semibold text-slate-700">{meta.total}</span>
-            </span>
-            <div className="flex items-center gap-1.5">
-              <button
-                disabled={meta.current_page <= 1}
-                onClick={() => setPage((p) => p - 1)}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 disabled:opacity-40 hover:bg-slate-100 transition-colors"
-              >
-                ← Prev
-              </button>
-              <span className="px-3 py-1.5 text-xs text-slate-500">
-                {meta.current_page} / {meta.last_page}
-              </span>
-              <button
-                disabled={meta.current_page >= meta.last_page}
-                onClick={() => setPage((p) => p + 1)}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 disabled:opacity-40 hover:bg-slate-100 transition-colors"
-              >
-                Next →
-              </button>
-            </div>
+      {/* List */}
+      <div className="space-y-3">
+        {isLoading && <div className="bg-white rounded-2xl border border-slate-200 py-16 text-center text-slate-400 text-sm">Loading bookings…</div>}
+        {isError && (
+          <div className="bg-red-50 rounded-2xl border border-red-200 py-10 text-center text-red-600 text-sm">
+            Could not load bookings. Check your internet connection and refresh the page.
           </div>
         )}
+        {!isLoading && !isError && bookings.length === 0 && (
+          <div className="bg-white rounded-2xl border border-dashed border-slate-300 py-16 text-center">
+            <div className="text-4xl mb-3">{tab === "awaiting" ? "🎉" : "📭"}</div>
+            <p className="font-semibold text-slate-700">
+              {search || service ? "No bookings match your search." : tab === "awaiting" ? "You're all caught up!" : `No ${activeTab.label.toLowerCase()} bookings yet.`}
+            </p>
+            {tab === "awaiting" && !search && !service && (
+              <p className="text-sm text-slate-500 mt-1">New bookings from the website will appear here.</p>
+            )}
+          </div>
+        )}
+
+        {!isLoading &&
+          !isError &&
+          bookings.map((b) => (
+            <BookingCard key={b.id} booking={b} place={placeName(b)} onOpen={() => setSelectedId(b.id)} />
+          ))}
       </div>
 
-      {/* Detail / edit modal */}
-      {selectedId && (
-        <div
-          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={() => setSelectedId(null)}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 max-h-[92vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {detailLoading || !detail ? (
-              <div className="py-16 text-center text-slate-400 text-sm">Loading details…</div>
-            ) : (
-              <BookingDetailModal
-                key={detail.id}
-                booking={detail}
-                onClose={() => setSelectedId(null)}
-                onSave={handleSave}
-                saving={updateBooking.isPending}
-                saveError={updateBooking.isError}
-              />
-            )}
+      {/* Pagination */}
+      {meta && meta.last_page > 1 && (
+        <div className="flex items-center justify-between mt-6">
+          <span className="text-sm text-slate-500">
+            Page {meta.current_page} of {meta.last_page}
+          </span>
+          <div className="flex gap-2">
+            <button
+              disabled={meta.current_page <= 1}
+              onClick={() => setPage((p) => p - 1)}
+              className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 disabled:opacity-40 hover:bg-slate-50"
+            >
+              ← Previous
+            </button>
+            <button
+              disabled={meta.current_page >= meta.last_page}
+              onClick={() => setPage((p) => p + 1)}
+              className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-700 disabled:opacity-40 hover:bg-slate-50"
+            >
+              Next →
+            </button>
           </div>
         </div>
       )}
+
+      {selectedId && <BookingPanel id={selectedId} placeName={placeName} onClose={() => setSelectedId(null)} />}
     </div>
   );
 }
 
-function BookingDetailModal({
-  booking,
-  onClose,
-  onSave,
-  saving,
-  saveError,
-}: {
-  booking: BookingDetail;
-  onClose: () => void;
-  onSave: (payload: { status: string; payment_status: string; admin_notes: string }) => void;
-  saving: boolean;
-  saveError: boolean;
-}) {
-  const [editStatus, setEditStatus] = useState(booking.status.value);
-  const [editPayment, setEditPayment] = useState(booking.payment_status.value);
-  const [editNotes, setEditNotes] = useState(booking.admin_notes ?? "");
+// ─── Booking card ─────────────────────────────────────────────────────────────
 
-  const rows: [string, string | number | null | undefined][] = [
-    ["Guest", booking.guest_name],
-    ["Email", booking.guest_email],
-    ["Phone", booking.guest_phone],
-    ["Service", booking.service_type?.label],
-    ["Room / Venue", venueLabel(booking)],
-    ["Check-in", booking.check_in_date ?? "—"],
-    ["Check-out", booking.check_out_date ?? "—"],
-    ["Event date", booking.event_date ?? "—"],
-    ["Reservation", booking.reservation_date && booking.reservation_time ? `${booking.reservation_date} ${booking.reservation_time}` : "—"],
-    ["Guests", booking.num_guests],
-  ];
+function BookingCard({ booking: b, place, onOpen }: { booking: Booking; place: string; onOpen: () => void }) {
+  const status = STATUS_TEXT[b.status.value] ?? { label: b.status.label, className: "bg-slate-100 text-slate-600" };
+  const payment = PAYMENT_TEXT[b.payment_status.value] ?? { label: b.payment_status.label, className: "bg-slate-100 text-slate-600" };
+  const when = whenText(b);
+  const isNew = b.status.value === "awaiting";
 
   return (
-    <>
-      {/* Modal header */}
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <p className="text-xs text-slate-400 font-mono mb-0.5">{booking.booking_ref}</p>
-          <h3 className="font-bold text-slate-800 text-lg leading-tight">{booking.guest_name}</h3>
+    <div
+      onClick={onOpen}
+      className={`group bg-white rounded-2xl border p-5 cursor-pointer transition-all hover:shadow-md ${
+        isNew ? "border-amber-200 border-l-4 border-l-amber-500" : "border-slate-200"
+      }`}
+    >
+      <div className="flex flex-col md:flex-row md:items-center gap-4">
+        <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-2xl shrink-0">{serviceIcon(b.service_type.value)}</div>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <h3 className="text-lg font-bold text-slate-800">{b.guest_name}</h3>
+            <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${status.className}`}>{status.label}</span>
+            {b.service_type.value !== "general" && (
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${payment.className}`}>{payment.label}</span>
+            )}
+          </div>
+          <p className="text-sm text-slate-700">
+            <span className="font-medium">{b.service_type.label}</span>
+            {place && <> · {place}</>}
+            {b.num_guests ? <> · {b.num_guests} guest{b.num_guests === 1 ? "" : "s"}</> : null}
+          </p>
+          {when && <p className="text-sm text-slate-500 mt-0.5">📅 {when}</p>}
+          <p className="text-xs text-slate-400 mt-1">
+            Ref {b.booking_ref} · received {timeAgo(b.created_at)}
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className={`px-2.5 py-1 rounded-md text-xs font-semibold ${statusBadge[booking.status.value] ?? "bg-slate-100 text-slate-500"}`}>
-            {booking.status.label}
-          </span>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+
+        <div className="flex flex-wrap gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+          {b.guest_phone && (
+            <>
+              <a href={`tel:${b.guest_phone}`} className="px-3.5 py-2 rounded-xl border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                📞 Call
+              </a>
+              <a
+                href={`https://wa.me/${phoneDigits(b.guest_phone)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-2 rounded-xl border border-green-200 bg-green-50 text-sm font-medium text-green-700 hover:bg-green-100"
+              >
+                WhatsApp
+              </a>
+            </>
+          )}
+          <button onClick={onOpen} className="px-4 py-2 rounded-xl bg-[#5A0E24] text-white text-sm font-semibold hover:bg-[#7a1230]">
+            {isNew ? "Review" : "Open"}
           </button>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Booking details */}
-      <div className="bg-slate-50 rounded-xl p-4 space-y-2.5 mb-5">
-        {rows.map(([l, v]) => (
-          <div key={l} className="flex gap-3 text-sm">
-            <span className="text-slate-400 w-28 shrink-0 pt-px">{l}</span>
-            <span className="text-slate-800 font-medium">{v ?? "—"}</span>
-          </div>
-        ))}
-        {booking.message && (
-          <div className="flex gap-3 text-sm">
-            <span className="text-slate-400 w-28 shrink-0 pt-px">Message</span>
-            <span className="text-slate-600 italic">{booking.message}</span>
-          </div>
+// ─── Side panel ───────────────────────────────────────────────────────────────
+
+function BookingPanel({ id, placeName, onClose }: { id: number; placeName: (b: Booking) => string; onClose: () => void }) {
+  const { data, isLoading } = useBooking(String(id));
+  const booking: Booking | undefined = data?.data;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-sm" onClick={onClose}>
+      <div className="w-full max-w-xl h-full bg-white shadow-2xl overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        {isLoading || !booking ? (
+          <div className="py-24 text-center text-slate-400 text-sm">Loading booking…</div>
+        ) : (
+          <BookingPanelBody key={booking.id} booking={booking} place={placeName(booking)} onClose={onClose} />
         )}
       </div>
+    </div>
+  );
+}
 
-      {/* Editable fields */}
-      <div className="space-y-4 mb-5">
-        <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Update booking</h4>
+function BookingPanelBody({ booking: b, place, onClose }: { booking: Booking; place: string; onClose: () => void }) {
+  const update = useUpdateBooking();
+  const [notes, setNotes] = useState(b.admin_notes ?? "");
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [done, setDone] = useState("");
+
+  const isGeneral = b.service_type.value === "general";
+  const isPaid = b.payment_status.value === "verified";
+  const isConfirmed = b.status.value === "verified";
+  const isCancelled = b.status.value === "cancelled";
+  const status = STATUS_TEXT[b.status.value] ?? { label: b.status.label, className: "bg-slate-100 text-slate-600" };
+
+  const save = (payload: Record<string, string>, message: string) => {
+    setDone("");
+    update.mutate(
+      { id: String(b.id), payload },
+      {
+        onSuccess: () => {
+          setDone(message);
+          setConfirmCancel(false);
+        },
+      }
+    );
+  };
+
+  const details: [string, string][] = [
+    ["Service", b.service_type.label],
+    ["Room / venue", place],
+    ["Dates", whenText(b)],
+    ["Guests", b.num_guests ? String(b.num_guests) : ""],
+  ].filter(([, v]) => v) as [string, string][];
+
+  return (
+    <div className="p-6 md:p-8">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 mb-6">
         <div>
-          <label className="text-xs font-semibold text-slate-600 block mb-1.5">Booking status</label>
-          <select
-            value={editStatus}
-            onChange={(e) => setEditStatus(e.target.value)}
-            className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent"
-          >
-            {STATUS_OPTIONS.filter((o) => o.value).map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-          {editStatus === "cancelled" && (
-            <p className="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
-              <span>⚠️</span> A cancellation email will be sent to the guest.
-            </p>
+          <p className="text-xs text-slate-400 mb-1">
+            Ref {b.booking_ref} · received {timeAgo(b.created_at)}
+          </p>
+          <h2 className="text-2xl font-bold text-slate-800">{b.guest_name}</h2>
+          <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-semibold ${status.className}`}>{status.label}</span>
+        </div>
+        <button onClick={onClose} aria-label="Close" className="p-2 rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-600 text-xl leading-none">
+          ✕
+        </button>
+      </div>
+
+      {/* Contact */}
+      <section className="mb-6">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Contact the guest</h3>
+        <div className="grid grid-cols-3 gap-2">
+          {b.guest_phone ? (
+            <a href={`tel:${b.guest_phone}`} className="flex flex-col items-center gap-1 py-3 rounded-xl border border-slate-200 hover:bg-slate-50 text-sm font-medium text-slate-700">
+              <span className="text-xl">📞</span>Call
+            </a>
+          ) : (
+            <span className="flex flex-col items-center gap-1 py-3 rounded-xl border border-dashed border-slate-200 text-xs text-slate-400">No phone</span>
+          )}
+          {b.guest_phone ? (
+            <a
+              href={`https://wa.me/${phoneDigits(b.guest_phone)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex flex-col items-center gap-1 py-3 rounded-xl border border-green-200 bg-green-50 hover:bg-green-100 text-sm font-medium text-green-700"
+            >
+              <span className="text-xl">💬</span>WhatsApp
+            </a>
+          ) : (
+            <span />
+          )}
+          <a href={`mailto:${b.guest_email}`} className="flex flex-col items-center gap-1 py-3 rounded-xl border border-slate-200 hover:bg-slate-50 text-sm font-medium text-slate-700">
+            <span className="text-xl">✉️</span>Email
+          </a>
+        </div>
+        <p className="text-sm text-slate-500 mt-2">
+          {b.guest_phone && <>{b.guest_phone} · </>}
+          {b.guest_email}
+        </p>
+      </section>
+
+      {/* What they booked */}
+      <section className="mb-6">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">What they asked for</h3>
+        <div className="rounded-2xl bg-slate-50 p-4 space-y-2">
+          {details.map(([label, value]) => (
+            <div key={label} className="flex gap-3 text-sm">
+              <span className="w-28 shrink-0 text-slate-500">{label}</span>
+              <span className="font-medium text-slate-800">{value}</span>
+            </div>
+          ))}
+          {b.message && (
+            <div className="pt-2 mt-2 border-t border-slate-200">
+              <p className="text-sm text-slate-500 mb-1">Their message</p>
+              <p className="text-sm text-slate-800 whitespace-pre-line">{b.message}</p>
+            </div>
           )}
         </div>
-        <div>
-          <label className="text-xs font-semibold text-slate-600 block mb-1.5">Payment status</label>
-          <select
-            value={editPayment}
-            onChange={(e) => setEditPayment(e.target.value)}
-            className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent"
-          >
-            {PAYMENT_OPTIONS.filter((o) => o.value).map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs font-semibold text-slate-600 block mb-1.5">Admin notes</label>
-          <textarea
-            value={editNotes}
-            onChange={(e) => setEditNotes(e.target.value)}
-            rows={3}
-            placeholder="Internal notes for this booking…"
-            className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent resize-none placeholder:text-slate-300"
-          />
-        </div>
-      </div>
+      </section>
 
-      <div className="flex gap-2">
+      {/* Actions */}
+      <section className="mb-6">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">What to do next</h3>
+
+        {isCancelled ? (
+          <div className="rounded-2xl border border-slate-200 p-4 text-sm text-slate-600">
+            This booking was cancelled.
+            <button
+              onClick={() => save({ status: "awaiting" }, "Booking moved back to “Needs attention”.")}
+              disabled={update.isPending}
+              className="block mt-3 px-4 py-2 rounded-xl border border-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Undo cancel
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {!isGeneral && (
+              <Step
+                number={1}
+                done={isPaid}
+                title={isPaid ? "Payment received" : "Has the guest paid?"}
+                text={isPaid ? "You marked this booking as paid." : "Check your bank account for their transfer before marking it as paid."}
+                action={
+                  isPaid ? (
+                    <button
+                      onClick={() => save({ payment_status: "pending" }, "Marked as not paid.")}
+                      disabled={update.isPending}
+                      className="text-xs font-semibold text-slate-500 hover:text-slate-700 underline"
+                    >
+                      Mark as not paid
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => save({ payment_status: "verified" }, "Marked as paid.")}
+                      disabled={update.isPending}
+                      className="px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      ✓ Mark as paid
+                    </button>
+                  )
+                }
+              />
+            )}
+            <Step
+              number={isGeneral ? 1 : 2}
+              done={isConfirmed}
+              title={isConfirmed ? (isGeneral ? "Enquiry handled" : "Booking confirmed") : isGeneral ? "Reply to the guest" : "Confirm the booking"}
+              text={
+                isConfirmed
+                  ? isGeneral
+                    ? "You marked this enquiry as handled."
+                    : "This booking is confirmed."
+                  : isGeneral
+                    ? "Call, WhatsApp or email them, then mark it as handled."
+                    : "Once you've spoken to the guest and checked payment, confirm the booking."
+              }
+              action={
+                !isConfirmed && (
+                  <button
+                    onClick={() => save({ status: "verified" }, isGeneral ? "Enquiry marked as handled." : "Booking confirmed.")}
+                    disabled={update.isPending}
+                    className="px-4 py-2.5 rounded-xl bg-[#5A0E24] text-white text-sm font-semibold hover:bg-[#7a1230] disabled:opacity-50"
+                  >
+                    {isGeneral ? "✓ Mark as handled" : "✓ Confirm booking"}
+                  </button>
+                )
+              }
+            />
+
+            {!confirmCancel ? (
+              <button onClick={() => setConfirmCancel(true)} className="text-sm font-semibold text-red-600 hover:text-red-700 pt-1">
+                Cancel this booking…
+              </button>
+            ) : (
+              <div className="rounded-2xl border-2 border-red-200 bg-red-50 p-4">
+                <p className="font-semibold text-red-800">Cancel this booking?</p>
+                <p className="text-sm text-red-700 mt-1">The guest will receive an email saying their booking was cancelled.</p>
+                <div className="flex gap-2 mt-3">
+                  <button
+                    onClick={() => save({ status: "cancelled" }, "Booking cancelled.")}
+                    disabled={update.isPending}
+                    className="px-4 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-700 disabled:opacity-50"
+                  >
+                    Yes, cancel it
+                  </button>
+                  <button onClick={() => setConfirmCancel(false)} className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-sm font-semibold text-slate-700">
+                    No, keep it
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {update.isPending && <p className="text-sm text-slate-500 mt-3">Saving…</p>}
+        {done && !update.isPending && <p className="text-sm font-medium text-green-700 mt-3">✓ {done}</p>}
+        {update.isError && <p className="text-sm font-medium text-red-600 mt-3">{errorMessage(update.error)}</p>}
+      </section>
+
+      {/* Notes */}
+      <section>
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Staff notes (only staff can see these)</h3>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={3}
+          placeholder="e.g. Guest called, will pay on arrival"
+          className="w-full px-3.5 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#5A0E24]/30 focus:border-[#5A0E24] resize-none"
+        />
         <button
-          onClick={() => onSave({ status: editStatus, payment_status: editPayment, admin_notes: editNotes })}
-          disabled={saving}
-          className="flex-1 py-2.5 text-sm font-semibold rounded-xl bg-[#5A0E24] text-white hover:bg-[#7a1230] disabled:opacity-60 transition-colors shadow-sm"
+          onClick={() => save({ admin_notes: notes }, "Notes saved.")}
+          disabled={update.isPending || notes === (b.admin_notes ?? "")}
+          className="mt-2 px-4 py-2 rounded-xl border border-slate-300 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
         >
-          {saving ? "Saving…" : "Save changes"}
+          Save notes
         </button>
-        <button
-          onClick={onClose}
-          className="flex-1 py-2.5 bg-slate-100 text-slate-700 text-sm font-semibold rounded-xl hover:bg-slate-200 transition-colors"
-        >
-          Cancel
-        </button>
+      </section>
+    </div>
+  );
+}
+
+function Step({
+  number,
+  done,
+  title,
+  text,
+  action,
+}: {
+  number: number;
+  done: boolean;
+  title: string;
+  text: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className={`rounded-2xl border p-4 flex gap-4 ${done ? "border-green-200 bg-green-50/60" : "border-slate-200"}`}>
+      <div
+        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${
+          done ? "bg-green-600 text-white" : "bg-slate-100 text-slate-600"
+        }`}
+      >
+        {done ? "✓" : number}
       </div>
-      {saveError && (
-        <p className="text-xs text-red-500 mt-3 text-center">Failed to save changes. Please try again.</p>
-      )}
-    </>
+      <div className="flex-1">
+        <p className="font-semibold text-slate-800">{title}</p>
+        <p className="text-sm text-slate-500 mt-0.5">{text}</p>
+        {action && <div className="mt-3">{action}</div>}
+      </div>
+    </div>
   );
 }
