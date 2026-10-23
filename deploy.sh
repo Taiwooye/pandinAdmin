@@ -27,7 +27,7 @@ ssh "$SERVER" "set -e
 
 echo "==> Checking site"
 for _ in {1..15}; do
-  code=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: admin.pandingroup.com" "http://${SERVER#*@}/login" || true)
+  code=$(curl -s -o /dev/null -w "%{http_code}" "https://admin.pandingroup.com/login" || true)
   if [ "$code" = "200" ]; then
     echo "Site is up (HTTP 200)"
     exit 0
