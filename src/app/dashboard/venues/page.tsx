@@ -30,6 +30,9 @@ type Venue = {
   description?: string;
   body?: string;
   capacity?: number | string;
+  min_capacity?: number | string;
+  max_capacity?: number | string;
+  floor_space_sqm?: number | string;
   price?: number | string;
   rate?: number | string;
   price_per_hour?: number | string;
@@ -66,9 +69,9 @@ function venueCover(v: Venue): string {
   return v.image_url ?? v.url ?? "";
 }
 function venueCapacity(v: Venue): string {
-  const c = v.capacity;
+  const c = v.max_capacity ?? v.capacity;
   if (!c) return "";
-  return `${c} guests`;
+  return v.min_capacity ? `${v.min_capacity}–${c} guests` : `${c} guests`;
 }
 function venuePrice(v: Venue): string {
   const p = v.price ?? v.rate ?? v.price_per_day ?? v.price_per_hour;
@@ -76,7 +79,7 @@ function venuePrice(v: Venue): string {
   return `₦${Number(p).toLocaleString()}`;
 }
 function venueSize(v: Venue): string {
-  const s = v.size ?? v.area;
+  const s = v.floor_space_sqm ?? v.size ?? v.area;
   if (!s) return "";
   return `${s} m²`;
 }
@@ -96,6 +99,10 @@ function venueActive(v: Venue): boolean {
   }
   return true;
 }
+function venueStatusValue(v: Venue): string {
+  if (!v.status) return "available";
+  return typeof v.status === "object" ? v.status.value : v.status;
+}
 function mediaId(m: VenueMedia): string { return String(m.id); }
 function mediaUrl(m: VenueMedia): string { return m.url ?? m.image_url ?? ""; }
 
@@ -104,45 +111,56 @@ function mediaUrl(m: VenueMedia): string { return m.url ?? m.image_url ?? ""; }
 type VenueForm = {
   name: string;
   description: string;
+  minCapacity: string;
   capacity: string;
   price: string;
   size: string;
   features: string;
   is_available: boolean;
+  status: string;
 };
 
 const EMPTY_FORM: VenueForm = {
   name: "",
   description: "",
+  minCapacity: "",
   capacity: "",
   price: "",
   size: "",
   features: "",
   is_available: true,
+  status: "available",
 };
 
 function formFromVenue(v: Venue): VenueForm {
   return {
     name: venueName(v),
     description: venueDescription(v),
-    capacity: String(v.capacity ?? ""),
-    price: String(v.price ?? v.rate ?? v.price_per_day ?? ""),
-    size: String(v.size ?? v.area ?? ""),
+    minCapacity: String(v.min_capacity ?? ""),
+    capacity: String(v.max_capacity ?? v.capacity ?? ""),
+    price: String(v.price_per_day ?? v.price ?? v.rate ?? ""),
+    size: String(v.floor_space_sqm ?? v.size ?? v.area ?? ""),
     features: venueFeatures(v).join(", "),
     is_available: venueActive(v),
+    status: venueStatusValue(v),
   };
 }
 
+// Maps the form to the backend's venue fields (features must be an array)
 function formToPayload(f: VenueForm) {
+  const features = f.features.split(",").map((s) => s.trim()).filter(Boolean);
+  const floorSpace = parseInt(f.size.replace(/[^\d]/g, ""), 10);
+  // Backend statuses: available | booked | maintenance
+  const status = f.is_available ? "available" : f.status !== "available" ? f.status : "maintenance";
   return {
     name: f.name.trim(),
     description: f.description.trim(),
-    ...(f.capacity ? { capacity: Number(f.capacity) } : {}),
-    ...(f.price ? { price: Number(f.price) } : {}),
-    ...(f.size ? { size: f.size.trim() } : {}),
-    ...(f.features.trim() ? { features: f.features.trim() } : {}),
-    is_available: f.is_available,
-    status: f.is_available ? "available" : "unavailable",
+    ...(f.minCapacity ? { min_capacity: Number(f.minCapacity) } : {}),
+    ...(f.capacity ? { max_capacity: Number(f.capacity) } : {}),
+    ...(f.price ? { price_per_day: Number(f.price) } : {}),
+    ...(!Number.isNaN(floorSpace) ? { floor_space_sqm: floorSpace } : {}),
+    features,
+    status,
   };
 }
 
@@ -498,9 +516,20 @@ export default function VenuesPage() {
               </div>
 
               {/* Capacity + Price row */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Capacity (guests)</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Min Guests</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={form.minCapacity}
+                    onChange={(e) => set("minCapacity", e.target.value)}
+                    placeholder="400"
+                    className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#5A0E24]/20 focus:border-[#5A0E24]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Max Guests</label>
                   <input
                     type="number"
                     min="0"
@@ -511,7 +540,7 @@ export default function VenuesPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Price (₦)</label>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">Price / Day (₦)</label>
                   <input
                     type="number"
                     min="0"
