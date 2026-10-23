@@ -7,13 +7,8 @@ export async function list(params?: Record<string, unknown>) {
   return data;
 }
 
-export async function invite(payload: {
-  name: string;
-  email: string;
-  role: string;
-  password: string;
-  password_confirmation: string;
-}) {
+// The backend generates the temporary password and emails it to the new staff member
+export async function invite(payload: { name: string; email: string; role: string }) {
   const { data } = await apiClient.post(`${BASE_PATH}/invite`, payload);
   return data;
 }

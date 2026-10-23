@@ -1,643 +1,940 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import Link from "next/link";
-import { useQueries } from "@tanstack/react-query";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   useRoomTypeList,
+  useRoomType,
   useRoomTypeUnits,
   useUpdateRoomType,
   useDeleteRoomType,
   useUpdateRoomTypeUnitStatus,
   useAddRoomTypeUnit,
   useDeleteRoomTypeUnit,
+  useUploadRoomTypeMedia,
+  useDeleteRoomTypeMedia,
 } from "@/hooks/queries/useRoomType";
 import * as roomTypesApi from "@/services/endpoints/roomTypes";
+import {
+  PageHeader,
+  Button,
+  Card,
+  Badge,
+  LoadingState,
+  ErrorState,
+  EmptyState,
+  Feedback,
+  errorMessage,
+  SidePanel,
+  ConfirmDialog,
+  Field,
+  TextInput,
+  TextArea,
+  Select,
+  Toggle,
+  TagInput,
+  inputClass,
+} from "@/components/ui";
 
-// ─── Types (matched to actual API response) ───────────────────────────────────
+// ─── Types (match AdminRoomTypeResource / AdminRoomResource / AdminMediaResource) ─
 
-type RoomType = {
+type Option = { value: string; label: string };
+
+type Media = {
   id: number;
-  name: string;
-  category: string | { value: string; label: string };
-  description?: string;
-  room_type_desc?: string;
-  price_per_night?: number;
-  price?: number;
-  capacity?: number;
-  facilities?: string[] | { id: number; name: string }[];
-  amenities?: string[] | { id: number; name: string }[];
+  url: string;
+  file_name?: string;
+  mime_type?: string;
+  type?: Option;
+  sort_order?: number;
 };
 
-// Confirmed API shape: { id, room_number, status: { value, label }, room_type_id }
 type RoomUnit = {
   id: number;
   room_number: string;
-  status: { value: string; label: string };
-  check_in_date?: string | null;
-  check_out_date?: string | null;
+  status: Option;
   room_type_id?: number;
+};
+
+type RoomType = {
+  id: number;
+  slug?: string;
+  name: string;
+  property_type?: Option;
+  category: Option | string | null;
+  description: string | null;
+  /** Laravel decimal cast — arrives as a string like "25000.00" */
+  price_per_night: string | number | null;
+  price_per_week: string | number | null;
+  price_per_month: string | number | null;
+  max_guests: number | null;
+  size_sqm: number | null;
+  bedroom_count: number | null;
+  features: string[] | null;
+  amenities: string[] | null;
+  facilities: string[] | null;
+  sort_order?: number | null;
+  is_featured?: boolean;
+  media?: Media[];
+  units?: RoomUnit[];
 };
 
 type UnitStatus = "available" | "booked" | "maintenance";
 
+type Note = { success?: string; error?: string };
+
+// ─── Plain-language labels ────────────────────────────────────────────────────
+
+// Must match App\Enums\RoomCategory values
+const HOTEL_CATEGORIES: Option[] = [
+  { value: "basic", label: "Basic" },
+  { value: "standard", label: "Standard" },
+  { value: "standard_plus", label: "Standard Plus" },
+  { value: "deluxe", label: "Deluxe" },
+  { value: "deluxe_suite", label: "Deluxe Suite" },
+  { value: "executive_suite", label: "Executive Suite" },
+];
+
+// Must match App\Enums\RoomStatus values
+const UNIT_STATUS: Record<UnitStatus, { label: string; option: string; tone: "green" | "red" | "amber" }> = {
+  available: { label: "Free", option: "Free – ready for guests", tone: "green" },
+  booked: { label: "Booked", option: "Booked – a guest is using it", tone: "red" },
+  maintenance: { label: "Out of service", option: "Out of service – repairs or cleaning", tone: "amber" },
+};
+
+const PAGE_SIZE = 20; // backend paginates room types 20 at a time
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function categoryValue(c: RoomType["category"]): string {
+  if (!c) return "";
+  return typeof c === "string" ? c : c.value ?? "";
+}
 
 function categoryLabel(c: RoomType["category"]): string {
   if (!c) return "";
-  if (typeof c === "string") return c;
+  if (typeof c === "string") return HOTEL_CATEGORIES.find((x) => x.value === c)?.label ?? c;
   return c.label ?? c.value ?? "";
 }
 
-function roomPrice(r: RoomType): number {
-  return r.price_per_night ?? r.price ?? 0;
+function toNumber(v: string | number | null | undefined): number {
+  const n = typeof v === "number" ? v : parseFloat(v ?? "");
+  return Number.isFinite(n) ? n : 0;
 }
 
-function roomDesc(r: RoomType): string {
-  return r.description ?? r.room_type_desc ?? "";
+function naira(v: string | number | null | undefined): string {
+  return `₦${toNumber(v).toLocaleString("en-NG", { maximumFractionDigits: 0 })}`;
 }
 
-function facilitiesList(r: RoomType): string[] {
-  const raw = r.facilities ?? r.amenities ?? [];
-  return raw.map((f) => (typeof f === "string" ? f : f.name));
+function listFrom<T>(raw: unknown): T[] {
+  if (Array.isArray(raw)) return raw as T[];
+  const d = (raw as { data?: unknown })?.data;
+  return Array.isArray(d) ? (d as T[]) : [];
 }
 
-function isUnavailable(u: RoomUnit): boolean {
-  const v = u.status?.value ?? "";
-  return v === "booked" || v === "maintenance";
+function objectFrom<T>(raw: unknown): T | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const d = (raw as { data?: unknown }).data;
+  if (d && typeof d === "object" && !Array.isArray(d)) return d as T;
+  return raw as T;
 }
 
-function unitsFromResponse(raw: unknown): RoomUnit[] {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw as RoomUnit[];
-  const wrapped = raw as { data?: unknown };
-  if (Array.isArray(wrapped.data)) return wrapped.data as RoomUnit[];
-  return [];
+function unitStatus(u: RoomUnit): UnitStatus {
+  const v = u.status?.value;
+  return v === "booked" || v === "maintenance" ? v : "available";
+}
+
+function isImage(m: Media): boolean {
+  if (m.type?.value) return m.type.value === "image";
+  return !m.mime_type || m.mime_type.startsWith("image/");
+}
+
+function plural(n: number, word: string, many = `${word}s`): string {
+  return `${n} ${n === 1 ? word : many}`;
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+type PanelTab = "rooms" | "details" | "photos";
+
 export default function RoomsPage() {
+  const router = useRouter();
   const [search, setSearch] = useState("");
-  const [managingId, setManagingId] = useState<number | null>(null);
+  const [page, setPage] = useState(1);
+  const [managing, setManaging] = useState<{ id: number; tab: PanelTab } | null>(null);
 
-  const { data: listData, isLoading, isError, error } = useRoomTypeList({ property_type: "hotel" });
-  const roomTypes: RoomType[] = Array.isArray(listData)
-    ? listData
-    : (listData?.data ?? []);
+  const { data: listData, isLoading, isError } = useRoomTypeList({ property_type: "hotel", page });
+  const roomTypes = listFrom<RoomType>(listData);
 
-  // Fetch units for every room type in parallel — this gives us real stats
+  // Units for every room type, using the same cache key as useRoomTypeUnits,
+  // so counts refresh as soon as a room's status is changed in the panel.
   const unitQueries = useQueries({
     queries: roomTypes.map((rt) => ({
       queryKey: ["roomTypes", String(rt.id), "units"],
       queryFn: () => roomTypesApi.listUnits(String(rt.id)),
-      enabled: roomTypes.length > 0,
     })),
   });
 
-  const statsLoading = isLoading || unitQueries.some((q) => q.isLoading);
+  const unitsFor = (rt: RoomType): RoomUnit[] | undefined => {
+    const q = unitQueries[roomTypes.indexOf(rt)];
+    if (q?.data) return listFrom<RoomUnit>(q.data);
+    return rt.units; // the list response already includes units
+  };
 
-  // Map each room type id → its fetched units (used for per-card counts too)
-  const unitsByRoomType = useMemo(() => {
-    const map: Record<number, RoomUnit[]> = {};
-    roomTypes.forEach((rt, i) => {
-      map[rt.id] = unitsFromResponse(unitQueries[i]?.data);
-    });
-    return map;
-  }, [roomTypes, unitQueries]);
+  const allUnits = roomTypes.flatMap((rt) => unitsFor(rt) ?? []);
+  const counts = {
+    total: allUnits.length,
+    available: allUnits.filter((u) => unitStatus(u) === "available").length,
+    booked: allUnits.filter((u) => unitStatus(u) === "booked").length,
+    maintenance: allUnits.filter((u) => unitStatus(u) === "maintenance").length,
+  };
 
-  const totalRooms = Object.values(unitsByRoomType).reduce((s, u) => s + u.length, 0);
-  const totalAvailable = Object.values(unitsByRoomType).reduce(
-    (s, u) => s + u.filter((x) => !isUnavailable(x)).length,
-    0
-  );
+  const q = search.toLowerCase().trim();
+  const filtered = !q
+    ? roomTypes
+    : roomTypes.filter(
+        (r) =>
+          r.name?.toLowerCase().includes(q) ||
+          categoryLabel(r.category).toLowerCase().includes(q) ||
+          (r.description ?? "").toLowerCase().includes(q) ||
+          [...(r.features ?? []), ...(r.amenities ?? []), ...(r.facilities ?? [])].some((f) => f.toLowerCase().includes(q)) ||
+          (unitsFor(r) ?? []).some((u) => u.room_number.toLowerCase().includes(q))
+      );
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim();
-    if (!q) return roomTypes;
-    return roomTypes.filter(
-      (r) =>
-        r.name?.toLowerCase().includes(q) ||
-        categoryLabel(r.category).toLowerCase().includes(q) ||
-        roomDesc(r).toLowerCase().includes(q) ||
-        facilitiesList(r).some((f) => f.toLowerCase().includes(q)) ||
-        String(roomPrice(r)).includes(q.replace(/[₦,\s]/g, ""))
-    );
-  }, [roomTypes, search]);
+  const managed = managing ? roomTypes.find((r) => r.id === managing.id) : undefined;
 
   return (
-    <div>
-      {/* Header */}
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">Hotel Rooms</h1>
-          <p className="text-slate-500 text-sm mt-1">Manage rates, availability, room numbers, and facilities.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <Link
-            href="/dashboard/rooms/new"
-            className="flex items-center gap-2 px-4 py-2.5 bg-[#5A0E24] text-white text-sm font-semibold rounded-xl hover:bg-[#921224] transition-colors shrink-0"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            Add Room
-          </Link>
-          <div className="relative">
-            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name, category, facility…"
-              className="pl-9 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 w-full sm:w-64"
-            />
-          </div>
-        </div>
-      </div>
+    <div className="max-w-6xl">
+      <PageHeader
+        title="Hotel rooms"
+        description="Your room types, their prices and which rooms are free. Open a room type to change its rooms, details or photos."
+        action={
+          <Button onClick={() => router.push("/dashboard/rooms/new")}>
+            <span className="text-lg leading-none">+</span> Add a room type
+          </Button>
+        }
+      />
 
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      {/* Summary */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
         {[
-          { label: "Total Rooms", value: totalRooms, color: "text-slate-800" },
-          { label: "Available", value: totalAvailable, color: "text-green-600" },
-          { label: "Booked", value: totalRooms - totalAvailable, color: "text-red-500" },
-        ].map(({ label, value, color }) => (
-          <div key={label} className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 text-center">
-            <div className={`text-2xl font-bold ${color}`}>
-              {statsLoading ? "—" : value}
-            </div>
-            <div className="text-xs text-slate-500 mt-0.5">{label}</div>
+          { label: "Rooms in total", value: counts.total, color: "text-slate-800" },
+          { label: "Free right now", value: counts.available, color: "text-green-700" },
+          { label: "Booked", value: counts.booked, color: "text-red-600" },
+          { label: "Out of service", value: counts.maintenance, color: "text-amber-600" },
+        ].map((s) => (
+          <div key={s.label} className="bg-white rounded-2xl border border-slate-200 px-4 py-3.5">
+            <div className="text-sm font-semibold text-slate-600">{s.label}</div>
+            <div className={`text-3xl font-bold mt-1 ${s.color}`}>{isLoading ? "–" : s.value}</div>
           </div>
         ))}
       </div>
 
-      {/* Loading / error / empty */}
-      {isLoading && (
-        <div className="flex flex-col items-center gap-3 py-20 text-slate-400">
-          <svg className="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          <span className="text-sm">Loading rooms…</span>
-        </div>
-      )}
+      {/* Search */}
+      <div className="relative mb-5">
+        <svg className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name, category, room number or feature"
+          className={`${inputClass} pl-11 py-3`}
+        />
+        {search && (
+          <button
+            onClick={() => setSearch("")}
+            aria-label="Clear search"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+          >
+            ✕
+          </button>
+        )}
+      </div>
 
-      {isError && (
-        <div className="text-center py-16 text-sm space-y-1">
-          <p className="text-red-500 font-semibold">Failed to load rooms.</p>
-          {error instanceof Error && (
-            <p className="text-slate-400 font-mono text-xs">{error.message}</p>
-          )}
-        </div>
-      )}
+      {/* List */}
+      {isLoading && <LoadingState label="Loading rooms…" />}
+      {isError && <ErrorState message="Could not load your rooms. Check your internet connection and refresh the page." />}
 
       {!isLoading && !isError && filtered.length === 0 && (
-        <div className="text-center py-16 text-slate-400">
-          <p className="font-medium">
-            {search ? `No rooms match "${search}"` : "No rooms found. Add one to get started."}
-          </p>
-        </div>
+        search ? (
+          <EmptyState icon="🔍" title={`No room types match "${search}"`} description="Try a different word, or clear the search." />
+        ) : (
+          <EmptyState
+            icon="🛏️"
+            title="No room types yet"
+            description="Add your first room type (for example “Deluxe Suite”) and its room numbers."
+            action={<Button onClick={() => router.push("/dashboard/rooms/new")}>+ Add a room type</Button>}
+          />
+        )
       )}
 
-      {/* Room cards */}
       {!isLoading && !isError && filtered.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {filtered.map((room) => {
-            const units = unitsByRoomType[room.id] ?? [];
-            const avail = units.filter((u) => !isUnavailable(u)).length;
-            const total = units.length;
-            const occupied = total - avail;
-            const availPct = total > 0 ? (avail / total) * 100 : 0;
-            const barColor =
-              avail === 0 ? "bg-red-500" : avail < total / 2 ? "bg-amber-500" : "bg-green-500";
-            const facilities = facilitiesList(room);
-            const unitsLoading = unitQueries[roomTypes.indexOf(room)]?.isLoading;
-
-            return (
-              <div key={room.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 flex flex-col gap-4">
-                {/* Name + price */}
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h3 className="text-xl font-black text-slate-800 uppercase tracking-wide">{room.name}</h3>
-                    <span className="inline-block mt-1 text-xs font-semibold text-[#5A0E24] bg-[#5A0E24]/10 px-2.5 py-0.5 rounded-full">
-                      {categoryLabel(room.category)}
-                    </span>
-                  </div>
-                  <div className="text-right shrink-0 ml-3">
-                    <div className="text-xl font-bold text-amber-700">₦{roomPrice(room).toLocaleString()}</div>
-                    <div className="text-xs text-slate-400">per night</div>
-                  </div>
-                </div>
-
-                {roomDesc(room) && (
-                  <p className="text-sm text-slate-500 -mt-2">
-                    {roomDesc(room)}
-                    {room.capacity ? ` · max ${room.capacity} guest${room.capacity > 1 ? "s" : ""}` : ""}
-                  </p>
-                )}
-
-                {/* Availability bar */}
-                <div>
-                  <div className="flex items-center justify-between text-xs mb-1.5">
-                    <span className="text-slate-500 font-medium">Availability</span>
-                    <span className="font-semibold text-slate-700">
-                      {unitsLoading ? "…" : `${avail} / ${total} rooms`}
-                    </span>
-                  </div>
-                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-300 ${barColor}`}
-                      style={{ width: `${availPct}%` }}
-                    />
-                  </div>
-                  <div className="flex justify-between text-xs mt-1.5">
-                    <span className="text-green-600 font-medium">{avail} Available</span>
-                    <span className="text-red-500 font-medium">{occupied} Booked</span>
-                  </div>
-                </div>
-
-                {/* Facilities */}
-                {facilities.length > 0 && (
-                  <div>
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Facilities</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {facilities.map((f) => (
-                        <span key={f} className="px-2 py-0.5 bg-amber-50 text-amber-700 text-xs rounded font-medium">{f}</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <button
-                  onClick={() => setManagingId(room.id)}
-                  className="w-full py-2 text-sm font-semibold bg-[#5A0E24]/10 text-[#5A0E24] rounded-xl hover:bg-[#5A0E24]/20 transition-colors"
-                >
-                  Manage Units &amp; Edit
-                </button>
-              </div>
-            );
-          })}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+          {filtered.map((room) => (
+            <RoomTypeCard
+              key={room.id}
+              room={room}
+              units={unitsFor(room)}
+              onOpen={(tab) => setManaging({ id: room.id, tab })}
+            />
+          ))}
         </div>
       )}
 
-      {/* Manage modal */}
-      {managingId !== null && roomTypes.find((r) => r.id === managingId) && (
-        <ManageModal
-          roomType={roomTypes.find((r) => r.id === managingId)!}
-          onClose={() => setManagingId(null)}
-          onDeleted={() => setManagingId(null)}
+      {/* Pagination (backend returns 20 per page without totals) */}
+      {!isLoading && !isError && (page > 1 || roomTypes.length >= PAGE_SIZE) && (
+        <div className="flex items-center justify-between mt-6">
+          <span className="text-sm text-slate-500">Page {page}</span>
+          <div className="flex gap-2">
+            <Button variant="secondary" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+              ← Previous
+            </Button>
+            <Button variant="secondary" disabled={roomTypes.length < PAGE_SIZE} onClick={() => setPage((p) => p + 1)}>
+              Next →
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {managing && managed && (
+        <ManagePanel
+          key={managed.id}
+          roomType={managed}
+          initialTab={managing.tab}
+          onClose={() => setManaging(null)}
         />
       )}
     </div>
   );
 }
 
-// ─── Manage modal ─────────────────────────────────────────────────────────────
+// ─── Card ─────────────────────────────────────────────────────────────────────
 
-function ManageModal({ roomType, onClose, onDeleted }: { roomType: RoomType; onClose: () => void; onDeleted: () => void }) {
-  const [tab, setTab] = useState<"units" | "edit">("units");
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const deleteRoomType = useDeleteRoomType();
+function RoomTypeCard({
+  room,
+  units,
+  onOpen,
+}: {
+  room: RoomType;
+  units: RoomUnit[] | undefined;
+  onOpen: (tab: PanelTab) => void;
+}) {
+  const cover = (room.media ?? []).find(isImage);
+  const total = units?.length ?? 0;
+  const free = (units ?? []).filter((u) => unitStatus(u) === "available").length;
 
-  function handleDeleteRoomType() {
-    deleteRoomType.mutate(String(roomType.id), { onSuccess: onDeleted });
-  }
+  let status: { tone: "green" | "amber" | "red" | "slate"; text: string };
+  if (!units) status = { tone: "slate", text: "Checking rooms…" };
+  else if (total === 0) status = { tone: "slate", text: "No room numbers added yet" };
+  else if (free === 0) status = { tone: "red", text: "Fully booked" };
+  else if (free < total / 2) status = { tone: "amber", text: `Only ${free} free` };
+  else status = { tone: "green", text: "Rooms available" };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-100">
-          <div>
-            <h3 className="font-black text-slate-800 text-lg uppercase tracking-wide">{roomType.name}</h3>
-            <p className="text-xs text-slate-400 mt-0.5">{categoryLabel(roomType.category)}</p>
+    <Card className="overflow-hidden flex flex-col">
+      <button type="button" onClick={() => onOpen("photos")} className="relative aspect-[16/10] bg-slate-100 block w-full text-left">
+        {cover ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={cover.url} alt={room.name} className="w-full h-full object-cover" />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center text-slate-400">
+            <span className="text-3xl">📷</span>
+            <span className="text-xs font-semibold mt-1">No photo yet – tap to add</span>
           </div>
-          <div className="flex items-center gap-2">
-            {confirmDelete ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-red-500 font-semibold">Delete room type?</span>
-                <button
-                  onClick={handleDeleteRoomType}
-                  disabled={deleteRoomType.isPending}
-                  className="px-3 py-1 text-xs font-semibold bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50"
-                >
-                  {deleteRoomType.isPending ? "Deleting…" : "Yes, delete"}
-                </button>
-                <button onClick={() => setConfirmDelete(false)} className="px-3 py-1 text-xs font-semibold bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200">
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setConfirmDelete(true)}
-                className="px-3 py-1 text-xs font-semibold bg-red-50 text-red-500 rounded-lg hover:bg-red-100 transition-colors"
-              >
-                Delete
-              </button>
-            )}
-            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition-colors">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+        )}
+        {room.is_featured && (
+          <span className="absolute top-3 left-3">
+            <Badge tone="wine">★ Featured on website</Badge>
+          </span>
+        )}
+      </button>
+
+      <div className="p-5 flex flex-col gap-3 flex-1">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-lg font-bold text-slate-800 truncate">{room.name}</h3>
+            {categoryLabel(room.category) && <p className="text-xs text-slate-500 mt-0.5">{categoryLabel(room.category)}</p>}
+          </div>
+          <div className="text-right shrink-0">
+            <div className="text-lg font-bold text-[#5A0E24]">{naira(room.price_per_night)}</div>
+            <div className="text-xs text-slate-500">per night</div>
           </div>
         </div>
 
-        <div className="flex border-b border-slate-100 px-6">
-          {(["units", "edit"] as const).map((t) => (
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={status.tone}>{status.text}</Badge>
+          {units && total > 0 && (
+            <span className="text-sm text-slate-600">
+              <span className="font-semibold text-slate-800">{free}</span> of {plural(total, "room")} free
+            </span>
+          )}
+        </div>
+
+        {room.max_guests ? <p className="text-sm text-slate-600">👤 Up to {plural(room.max_guests, "guest")}</p> : null}
+
+        <div className="grid grid-cols-2 gap-2 mt-auto pt-2">
+          <Button onClick={() => onOpen("rooms")}>Rooms &amp; availability</Button>
+          <Button variant="secondary" onClick={() => onOpen("details")}>
+            Edit details
+          </Button>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ─── Manage panel ─────────────────────────────────────────────────────────────
+
+function ManagePanel({ roomType, initialTab, onClose }: { roomType: RoomType; initialTab: PanelTab; onClose: () => void }) {
+  const [tab, setTab] = useState<PanelTab>(initialTab);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const deleteRoomType = useDeleteRoomType();
+
+  const tabs: { value: PanelTab; label: string }[] = [
+    { value: "rooms", label: "Rooms" },
+    { value: "details", label: "Details & price" },
+    { value: "photos", label: "Photos" },
+  ];
+
+  function handleDelete() {
+    setDeleteError("");
+    deleteRoomType.mutate(String(roomType.id), {
+      onSuccess: () => {
+        setConfirmDelete(false);
+        onClose();
+      },
+      onError: (err) => setDeleteError(errorMessage(err)),
+    });
+  }
+
+  const cat = categoryLabel(roomType.category);
+
+  return (
+    <>
+      <SidePanel
+        title={roomType.name}
+        subtitle={`${cat ? `${cat} · ` : ""}${naira(roomType.price_per_night)} per night`}
+        onClose={onClose}
+        footer={
+          <div className="flex items-center justify-between gap-3">
+            <Button variant="ghost" className="text-red-600 hover:bg-red-50" onClick={() => setConfirmDelete(true)}>
+              Delete this room type
+            </Button>
+            <Button variant="secondary" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-xl mb-6">
+          {tabs.map((t) => (
             <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`py-3 mr-6 text-sm font-semibold border-b-2 transition-colors ${
-                tab === t ? "border-[#5A0E24] text-[#5A0E24]" : "border-transparent text-slate-400 hover:text-slate-600"
+              key={t.value}
+              type="button"
+              onClick={() => setTab(t.value)}
+              className={`py-2 rounded-lg text-sm font-semibold transition-colors ${
+                tab === t.value ? "bg-white text-[#5A0E24] shadow-sm" : "text-slate-500 hover:text-slate-700"
               }`}
             >
-              {t === "units" ? "Room Units" : "Edit Details"}
+              {t.label}
             </button>
           ))}
         </div>
 
-        <div className="p-6">
-          {tab === "units" ? (
-            <UnitsTab roomTypeId={String(roomType.id)} />
-          ) : (
-            <EditTab roomType={roomType} onSaved={onClose} />
-          )}
-        </div>
-      </div>
-    </div>
+        {tab === "rooms" && <RoomsTab roomTypeId={String(roomType.id)} />}
+        {tab === "details" && <DetailsTab roomType={roomType} />}
+        {tab === "photos" && <PhotosTab roomType={roomType} />}
+      </SidePanel>
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Delete “${roomType.name}”?`}
+          message="This room type will disappear from the website and guests will no longer be able to book it. Past bookings stay in your records."
+          confirmLabel="Yes, delete room type"
+          onConfirm={handleDelete}
+          onCancel={() => {
+            setConfirmDelete(false);
+            setDeleteError("");
+          }}
+          busy={deleteRoomType.isPending}
+          error={deleteError}
+        />
+      )}
+    </>
   );
 }
 
-// ─── Units tab ────────────────────────────────────────────────────────────────
+// ─── Rooms (units) tab ────────────────────────────────────────────────────────
 
-const STATUS_CYCLE: Record<string, UnitStatus> = {
-  available: "booked",
-  booked: "available",
-  maintenance: "available",
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  available: "Available",
-  booked: "Booked",
-  maintenance: "Maintenance",
-};
-
-const STATUS_COLORS: Record<string, { chip: string; row: string; btn: string }> = {
-  available: {
-    chip: "bg-green-50 text-green-700 border-green-200 hover:bg-green-100",
-    row: "border-green-200 bg-green-50/60",
-    btn: "bg-green-100 text-green-700 hover:bg-green-200",
-  },
-  booked: {
-    chip: "bg-red-50 text-red-600 border-red-200 hover:bg-red-100",
-    row: "border-red-200 bg-red-50",
-    btn: "bg-red-100 text-red-600 hover:bg-red-200",
-  },
-  maintenance: {
-    chip: "bg-orange-50 text-orange-600 border-orange-200 hover:bg-orange-100",
-    row: "border-orange-200 bg-orange-50",
-    btn: "bg-orange-100 text-orange-600 hover:bg-orange-200",
-  },
-};
-
-function UnitsTab({ roomTypeId }: { roomTypeId: string }) {
+function RoomsTab({ roomTypeId }: { roomTypeId: string }) {
   const { data, isLoading, isError } = useRoomTypeUnits(roomTypeId);
   const updateStatus = useUpdateRoomTypeUnitStatus();
   const addUnit = useAddRoomTypeUnit();
   const deleteUnit = useDeleteRoomTypeUnit();
-  const units: RoomUnit[] = unitsFromResponse(data);
+  const units = listFrom<RoomUnit>(data)
+    .slice()
+    .sort((a, b) => a.room_number.localeCompare(b.room_number, undefined, { numeric: true }));
 
   const [newRoomNumber, setNewRoomNumber] = useState("");
-  const [addError, setAddError] = useState("");
+  const [note, setNote] = useState<Note>({});
+  const [toDelete, setToDelete] = useState<RoomUnit | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [savingId, setSavingId] = useState<number | null>(null);
 
-  const available = units.filter((u) => u.status?.value === "available").length;
+  const free = units.filter((u) => unitStatus(u) === "available").length;
 
-  function cycleStatus(unit: RoomUnit) {
-    const current = unit.status?.value ?? "available";
-    const next: UnitStatus = STATUS_CYCLE[current] ?? "available";
-    updateStatus.mutate({ id: roomTypeId, unitId: String(unit.id), payload: { status: next } });
-  }
-
-  function handleAddUnit(e: React.FormEvent) {
+  function handleAdd(e: React.FormEvent) {
     e.preventDefault();
     const rn = newRoomNumber.trim();
     if (!rn) return;
-    if (units.some((u) => u.room_number === rn)) { setAddError("Room number already exists."); return; }
-    setAddError("");
+    if (rn.length > 20) return setNote({ error: "Room numbers can be at most 20 characters long." });
+    if (units.some((u) => u.room_number.toLowerCase() === rn.toLowerCase()))
+      return setNote({ error: `Room ${rn} is already on the list.` });
+    setNote({});
     addUnit.mutate(
+      // AdminRoomTypeController@addUnit (hotel): room_number (string, max 20), status (RoomStatus)
       { id: roomTypeId, payload: { room_number: rn, status: "available" } },
-      { onSuccess: () => setNewRoomNumber("") }
+      {
+        onSuccess: () => {
+          setNewRoomNumber("");
+          setNote({ success: `Room ${rn} added.` });
+        },
+        onError: (err) => setNote({ error: errorMessage(err) }),
+      }
     );
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex flex-col items-center gap-2 py-12 text-slate-400">
-        <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-        </svg>
-        <span className="text-sm">Loading units…</span>
-      </div>
+  function changeStatus(unit: RoomUnit, next: UnitStatus) {
+    if (next === unitStatus(unit)) return;
+    setSavingId(unit.id);
+    setNote({});
+    updateStatus.mutate(
+      // AdminRoomTypeController@updateUnit: status (required, RoomStatus)
+      { id: roomTypeId, unitId: String(unit.id), payload: { status: next } },
+      {
+        onSuccess: () => setNote({ success: `Room ${unit.room_number} is now marked “${UNIT_STATUS[next].label}”.` }),
+        onError: (err) => setNote({ error: errorMessage(err) }),
+        onSettled: () => setSavingId(null),
+      }
     );
   }
 
-  if (isError) return <p className="text-center py-10 text-red-500 text-sm">Failed to load units.</p>;
+  function handleDelete() {
+    if (!toDelete) return;
+    const rn = toDelete.room_number;
+    setDeleteError("");
+    deleteUnit.mutate(
+      { id: roomTypeId, unitId: String(toDelete.id) },
+      {
+        onSuccess: () => {
+          setToDelete(null);
+          setNote({ success: `Room ${rn} removed.` });
+        },
+        onError: (err) => setDeleteError(errorMessage(err)),
+      }
+    );
+  }
+
+  if (isLoading) return <LoadingState label="Loading rooms…" />;
+  if (isError) return <ErrorState message="Could not load the rooms for this room type. Check your internet connection and try again." />;
 
   return (
-    <div className="space-y-4">
-      {/* Add unit form */}
-      <form onSubmit={handleAddUnit} className="flex gap-2">
-        <input
-          value={newRoomNumber}
-          onChange={(e) => { setNewRoomNumber(e.target.value); setAddError(""); }}
-          placeholder="Room number, e.g. 401"
-          className="flex-1 px-3 py-2 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#5A0E24]/20 focus:border-[#5A0E24]"
-        />
-        <button
-          type="submit"
-          disabled={!newRoomNumber.trim() || addUnit.isPending}
-          className="px-4 py-2 text-xs font-semibold bg-[#5A0E24] text-white rounded-xl hover:bg-[#921224] disabled:opacity-40 transition-colors shrink-0"
-        >
-          {addUnit.isPending ? "Adding…" : "+ Add Room"}
-        </button>
+    <div className="space-y-5">
+      <form onSubmit={handleAdd}>
+        <Field label="Add a room number" hint="The number on the door, e.g. 101. Guests can book it once it's added.">
+          <div className="flex gap-2">
+            <TextInput
+              value={newRoomNumber}
+              maxLength={20}
+              onChange={(e) => {
+                setNewRoomNumber(e.target.value);
+                setNote({});
+              }}
+              placeholder="e.g. 101"
+            />
+            <Button type="submit" disabled={!newRoomNumber.trim() || addUnit.isPending} className="shrink-0">
+              {addUnit.isPending ? "Adding…" : "Add room"}
+            </Button>
+          </div>
+        </Field>
       </form>
-      {addError && <p className="text-xs text-red-500">{addError}</p>}
-      {addUnit.isError && <p className="text-xs text-red-500">Failed to add room. Please try again.</p>}
+
+      <Feedback success={note.success} error={note.error} />
 
       {units.length === 0 ? (
-        <p className="text-center py-8 text-slate-400 text-sm">No units yet. Add one above.</p>
+        <EmptyState icon="🚪" title="No room numbers yet" description="Add the room numbers that belong to this room type above." />
       ) : (
-        <>
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-              {units.length} unit{units.length !== 1 ? "s" : ""}
-            </p>
-            <span className="text-xs text-slate-400">{available} of {units.length} available</span>
-          </div>
-
-          {/* Chip overview */}
-          <div className="flex flex-wrap gap-1.5">
+        <div>
+          <p className="text-sm text-slate-600 mb-3">
+            <span className="font-semibold text-slate-800">{free}</span> of {plural(units.length, "room")} free. Change a room&apos;s
+            status when a guest checks in or out, or when it needs repairs.
+          </p>
+          <div className="space-y-2">
             {units.map((u) => {
-              const v = u.status?.value ?? "available";
-              const colors = STATUS_COLORS[v] ?? STATUS_COLORS.available;
+              const s = unitStatus(u);
               return (
-                <button
-                  key={u.id}
-                  onClick={() => cycleStatus(u)}
-                  disabled={updateStatus.isPending}
-                  title={`${u.room_number} — ${STATUS_LABEL[v]}. Click to toggle.`}
-                  className={`px-2.5 py-1 text-xs font-mono font-bold rounded-lg border-2 transition-all disabled:opacity-50 ${colors.chip}`}
-                >
-                  {u.room_number}
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-[10px] text-slate-400">Tap a room to cycle: available → occupied → available</p>
-
-          {/* Detail rows */}
-          <div className="space-y-2 pt-2">
-            {units.map((u) => {
-              const v = u.status?.value ?? "available";
-              const colors = STATUS_COLORS[v] ?? STATUS_COLORS.available;
-              const unavailable = isUnavailable(u);
-              return (
-                <div key={u.id} className={`rounded-xl border-2 p-3 transition-all ${colors.row}`}>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono font-bold text-slate-700 text-sm">Room {u.room_number}</span>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button
-                        type="button"
-                        disabled={updateStatus.isPending}
-                        onClick={() => cycleStatus(u)}
-                        className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold transition-colors disabled:opacity-50 ${colors.btn}`}
-                      >
-                        <div className={`w-1.5 h-1.5 rounded-full ${v === "available" ? "bg-green-500" : v === "maintenance" ? "bg-orange-500" : "bg-red-500"}`} />
-                        {STATUS_LABEL[v]}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={deleteUnit.isPending}
-                        onClick={() => deleteUnit.mutate({ id: roomTypeId, unitId: String(u.id) })}
-                        className="p-1 text-slate-300 hover:text-red-500 disabled:opacity-40 transition-colors"
-                        title="Delete unit"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    </div>
+                <div key={u.id} className="flex items-center gap-3 rounded-xl border border-slate-200 p-3">
+                  <div className="w-16 shrink-0">
+                    <div className="text-xs text-slate-500">Room</div>
+                    <div className="font-bold text-slate-800 truncate">{u.room_number}</div>
                   </div>
-                  {unavailable && (u.check_in_date || u.check_out_date) && (
-                    <div className="flex gap-4 mt-2 text-xs text-slate-500">
-                      {u.check_in_date && <span>Check-in: <span className="font-medium text-slate-700">{u.check_in_date}</span></span>}
-                      {u.check_out_date && <span>Check-out: <span className="font-medium text-slate-700">{u.check_out_date}</span></span>}
-                    </div>
-                  )}
+                  <div className="flex-1 min-w-0">
+                    <Select
+                      aria-label={`Status of room ${u.room_number}`}
+                      value={s}
+                      disabled={savingId === u.id}
+                      onChange={(e) => changeStatus(u, e.target.value as UnitStatus)}
+                    >
+                      {(Object.keys(UNIT_STATUS) as UnitStatus[]).map((k) => (
+                        <option key={k} value={k}>
+                          {UNIT_STATUS[k].option}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <span className="hidden sm:block w-28 shrink-0">
+                    <Badge tone={UNIT_STATUS[s].tone}>{savingId === u.id ? "Saving…" : UNIT_STATUS[s].label}</Badge>
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-red-600 hover:bg-red-50 shrink-0"
+                    onClick={() => {
+                      setDeleteError("");
+                      setToDelete(u);
+                    }}
+                  >
+                    Remove
+                  </Button>
                 </div>
               );
             })}
           </div>
-        </>
+        </div>
+      )}
+
+      {toDelete && (
+        <ConfirmDialog
+          title={`Remove room ${toDelete.room_number}?`}
+          message={`Room ${toDelete.room_number} will be removed for good and guests won't be able to book it any more. You can add it again later if you need to.`}
+          confirmLabel="Yes, remove room"
+          onConfirm={handleDelete}
+          onCancel={() => setToDelete(null)}
+          busy={deleteUnit.isPending}
+          error={deleteError}
+        />
       )}
     </div>
   );
 }
 
-// ─── Edit tab ─────────────────────────────────────────────────────────────────
+// ─── Details tab ──────────────────────────────────────────────────────────────
 
-function EditTab({ roomType, onSaved }: { roomType: RoomType; onSaved: () => void }) {
-  const [price, setPrice] = useState(String(roomPrice(roomType)));
-  const [desc, setDesc] = useState(roomDesc(roomType));
-  const [capacity, setCapacity] = useState(String(roomType.capacity ?? ""));
-  const [facilitiesStr, setFacilitiesStr] = useState(facilitiesList(roomType).join(", "));
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h3 className="text-sm font-bold uppercase tracking-wide text-[#5A0E24] mb-3">{children}</h3>;
+}
+
+function numberOrEmpty(v: string | number | null | undefined): string {
+  if (v === null || v === undefined || v === "") return "";
+  const n = toNumber(v);
+  return n ? String(n) : "";
+}
+
+function optionalAmount(v: string): number | null {
+  if (!v.trim()) return null;
+  const n = parseFloat(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function DetailsTab({ roomType }: { roomType: RoomType }) {
+  const [name, setName] = useState(roomType.name ?? "");
+  const [category, setCategory] = useState(categoryValue(roomType.category));
+  const [description, setDescription] = useState(roomType.description ?? "");
+  const [maxGuests, setMaxGuests] = useState(roomType.max_guests ? String(roomType.max_guests) : "");
+  const [size, setSize] = useState(roomType.size_sqm ? String(roomType.size_sqm) : "");
+  const [price, setPrice] = useState(numberOrEmpty(roomType.price_per_night));
+  const [priceWeek, setPriceWeek] = useState(numberOrEmpty(roomType.price_per_week));
+  const [priceMonth, setPriceMonth] = useState(numberOrEmpty(roomType.price_per_month));
+  const [features, setFeatures] = useState<string[]>(roomType.features ?? []);
+  const [amenities, setAmenities] = useState<string[]>(roomType.amenities ?? []);
+  const [facilities, setFacilities] = useState<string[]>(roomType.facilities ?? []);
+  const [featured, setFeatured] = useState(!!roomType.is_featured);
+  const [note, setNote] = useState<Note>({});
 
   const updateRoomType = useUpdateRoomType();
 
+  const knownCategory = !category || HOTEL_CATEGORIES.some((c) => c.value === category);
+
   function save() {
+    const priceNum = parseFloat(price);
+    const guestsNum = parseInt(maxGuests, 10);
+    const sizeNum = size.trim() ? parseInt(size, 10) : null;
+
+    if (!name.trim()) return setNote({ error: "Please enter a name for this room type." });
+    if (!category) return setNote({ error: "Please choose a category." });
+    if (!description.trim()) return setNote({ error: "Please write a short description – it is shown on the website." });
+    if (!Number.isFinite(priceNum) || priceNum <= 0) return setNote({ error: "Please enter the price per night." });
+    if (!Number.isFinite(guestsNum) || guestsNum < 1) return setNote({ error: "Please enter how many guests can stay (at least 1)." });
+    if (sizeNum !== null && (!Number.isFinite(sizeNum) || sizeNum < 1))
+      return setNote({ error: "Room size must be a whole number, or leave it empty." });
+
+    setNote({});
     updateRoomType.mutate(
       {
         id: String(roomType.id),
+        // Field names/types follow AdminRoomTypeController@update validation
         payload: {
-          price_per_night: parseInt(price) || 0,
-          description: desc,
-          capacity: parseInt(capacity) || undefined,
-          facilities: facilitiesStr.split(",").map((s) => s.trim()).filter(Boolean),
+          name: name.trim(),
+          // Only send category when it's one the backend accepts (RoomCategory enum)
+          ...(knownCategory ? { category } : {}),
+          description: description.trim(),
+          price_per_night: priceNum,
+          price_per_week: optionalAmount(priceWeek),
+          price_per_month: optionalAmount(priceMonth),
+          max_guests: guestsNum,
+          size_sqm: sizeNum,
+          features,
+          amenities,
+          facilities,
+          is_featured: featured,
         },
       },
-      { onSuccess: onSaved }
+      {
+        onSuccess: () => setNote({ success: "Changes saved. The website now shows the new details." }),
+        onError: (err) => setNote({ error: errorMessage(err) }),
+      }
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      <section className="space-y-4">
+        <SectionTitle>Basic details</SectionTitle>
+        <Field label="Name" required hint="Shown on the website, e.g. “Mandela Suite”">
+          <TextInput value={name} maxLength={255} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Category" required>
+          <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+            {!category && <option value="">Choose a category</option>}
+            {!knownCategory && <option value={category}>{categoryLabel(roomType.category)}</option>}
+            {HOTEL_CATEGORIES.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Description" required hint="A short sentence guests will read, e.g. “1 king-size bed, sleeps 2”">
+          <TextArea value={description} onChange={(e) => setDescription(e.target.value)} />
+        </Field>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="How many guests can stay" required>
+            <TextInput type="number" min={1} step={1} value={maxGuests} onChange={(e) => setMaxGuests(e.target.value)} />
+          </Field>
+          <Field label="Room size (m²)" hint="Optional">
+            <TextInput type="number" min={1} step={1} value={size} onChange={(e) => setSize(e.target.value)} placeholder="e.g. 32" />
+          </Field>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <SectionTitle>Price</SectionTitle>
+        <Field label="Price per night (₦)" required hint="Shown on the website">
+          <TextInput type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} placeholder="e.g. 45000" />
+        </Field>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Price per week (₦)" hint="Optional – leave empty if none">
+            <TextInput type="number" min={0} value={priceWeek} onChange={(e) => setPriceWeek(e.target.value)} />
+          </Field>
+          <Field label="Price per month (₦)" hint="Optional – leave empty if none">
+            <TextInput type="number" min={0} value={priceMonth} onChange={(e) => setPriceMonth(e.target.value)} />
+          </Field>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <SectionTitle>What&apos;s included</SectionTitle>
+        <Field label="Room features" hint="Shown on the website under “Room Features”. Type one and press Enter.">
+          <TagInput value={features} onChange={setFeatures} placeholder="e.g. King-size bed, then press Enter" />
+        </Field>
+        <Field label="In-room amenities" hint="Shown under “In-Room Amenities”, e.g. Smart TV, Fridge">
+          <TagInput value={amenities} onChange={setAmenities} placeholder="e.g. Smart TV, then press Enter" />
+        </Field>
+        <Field label="Hotel facilities" hint="Shown under “Facilities”, e.g. Swimming pool, Gym">
+          <TagInput value={facilities} onChange={setFacilities} placeholder="e.g. Swimming pool, then press Enter" />
+        </Field>
+      </section>
+
+      <section className="space-y-4">
+        <SectionTitle>Website</SectionTitle>
+        <Toggle
+          checked={featured}
+          onChange={setFeatured}
+          label="Feature this room type on the website"
+          description="Featured rooms are highlighted to guests."
+        />
+      </section>
+
+      <div className="space-y-3 pt-4 border-t border-slate-100">
+        <Feedback success={note.success} error={note.error} />
+        <Button onClick={save} disabled={updateRoomType.isPending} className="w-full">
+          {updateRoomType.isPending ? "Saving…" : "Save changes"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Photos tab ───────────────────────────────────────────────────────────────
+
+const ACCEPTED_IMAGES = ["image/jpeg", "image/png", "image/webp"];
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // backend limit: max:102400 (KB)
+
+function PhotosTab({ roomType }: { roomType: RoomType }) {
+  const queryClient = useQueryClient();
+  const id = String(roomType.id);
+  // Same cache key the upload/delete hooks refresh
+  const { data, isLoading } = useRoomType(id);
+  const detail = objectFrom<RoomType>(data);
+  const media = detail?.media ?? roomType.media ?? [];
+
+  const upload = useUploadRoomTypeMedia();
+  const remove = useDeleteRoomTypeMedia();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [note, setNote] = useState<Note>({});
+  const [toDelete, setToDelete] = useState<Media | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+
+  // Also refresh the room cards so the cover photo updates
+  const refreshList = () => queryClient.invalidateQueries({ queryKey: ["roomTypes"] });
+
+  async function handleFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const chosen = Array.from(files);
+    const valid = chosen.filter((f) => ACCEPTED_IMAGES.includes(f.type) && f.size <= MAX_UPLOAD_BYTES);
+    const skipped = chosen.length - valid.length;
+    if (valid.length === 0) {
+      setNote({ error: "Please choose JPG, PNG or WEBP photos (each under 100 MB)." });
+      return;
+    }
+    setNote({});
+    setProgress({ done: 0, total: valid.length });
+    let failed = 0;
+    let lastError = "";
+    for (let i = 0; i < valid.length; i++) {
+      const fd = new FormData();
+      fd.append("file", valid[i]); // uploadMedia validates a single required "file"
+      try {
+        await upload.mutateAsync({ id, formData: fd });
+      } catch (err) {
+        failed++;
+        lastError = errorMessage(err);
+      }
+      setProgress({ done: i + 1, total: valid.length });
+    }
+    setProgress(null);
+    refreshList();
+    const uploaded = valid.length - failed;
+    const skippedText = skipped ? ` ${plural(skipped, "file")} skipped (not a JPG/PNG/WEBP photo, or too large).` : "";
+    if (failed) setNote({ error: `${uploaded} of ${plural(valid.length, "photo")} uploaded. ${lastError}${skippedText}` });
+    else setNote({ success: `${plural(uploaded, "photo")} added.${skippedText}` });
+  }
+
+  function handleDelete() {
+    if (!toDelete) return;
+    setDeleteError("");
+    remove.mutate(
+      { id, mediaId: String(toDelete.id) },
+      {
+        onSuccess: () => {
+          setToDelete(null);
+          setNote({ success: "Photo removed." });
+          refreshList();
+        },
+        onError: (err) => setDeleteError(errorMessage(err)),
+      }
     );
   }
 
   return (
     <div className="space-y-5">
-      <div>
-        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Price per night (₦)</label>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <p className="text-sm text-slate-600">The first photo is the cover shown on the website. JPG, PNG or WEBP.</p>
+        <Button onClick={() => inputRef.current?.click()} disabled={progress !== null} className="shrink-0">
+          {progress ? `Uploading ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…` : "📷 Add photos"}
+        </Button>
         <input
-          type="number"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+          ref={inputRef}
+          type="file"
+          accept={ACCEPTED_IMAGES.join(",")}
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            handleFiles(e.target.files);
+            e.target.value = "";
+          }}
         />
       </div>
-      <div>
-        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Description</label>
-        <input
-          value={desc}
-          onChange={(e) => setDesc(e.target.value)}
-          placeholder="e.g. 1 King sized bed for 3 persons"
-          className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+
+      <Feedback success={note.success} error={note.error} />
+
+      {isLoading && media.length === 0 ? (
+        <LoadingState label="Loading photos…" />
+      ) : media.length === 0 ? (
+        <EmptyState
+          icon="📷"
+          title="No photos yet"
+          description="Rooms with photos get more bookings. Add a few clear pictures of the room."
+          action={<Button onClick={() => inputRef.current?.click()}>Add photos</Button>}
         />
-      </div>
-      <div>
-        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">Max guests</label>
-        <input
-          type="number"
-          min={1}
-          value={capacity}
-          onChange={(e) => setCapacity(e.target.value)}
-          className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-        />
-      </div>
-      <div>
-        <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1.5">
-          Facilities <span className="normal-case font-normal text-slate-400">(comma-separated)</span>
-        </label>
-        <textarea
-          value={facilitiesStr}
-          onChange={(e) => setFacilitiesStr(e.target.value)}
-          rows={3}
-          placeholder="e.g. 24/7 AC, Smart TV, Fridge"
-          className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
-        />
-      </div>
-      {updateRoomType.isError && (
-        <p className="text-xs text-red-500">Failed to save changes. Please try again.</p>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {media.map((m, i) => (
+            <div key={m.id} className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+              <div className="relative aspect-square bg-slate-100">
+                {isImage(m) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={m.url} alt={m.file_name ?? "Room photo"} className="w-full h-full object-cover" />
+                ) : (
+                  <video src={m.url} className="w-full h-full object-cover" muted />
+                )}
+                {i === 0 && (
+                  <span className="absolute top-2 left-2">
+                    <Badge tone="wine">Cover photo</Badge>
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteError("");
+                  setToDelete(m);
+                }}
+                className="w-full py-2 text-xs font-semibold text-red-600 hover:bg-red-50"
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
       )}
-      <div className="flex gap-2 pt-1">
-        <button
-          onClick={save}
-          disabled={updateRoomType.isPending}
-          className="flex-1 py-2.5 bg-[#5A0E24] text-white font-semibold rounded-xl text-sm hover:bg-[#921224] disabled:opacity-60 transition-colors"
-        >
-          {updateRoomType.isPending ? "Saving…" : "Save Changes"}
-        </button>
-        <button
-          onClick={onSaved}
-          className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-semibold rounded-xl text-sm hover:bg-slate-200 transition-colors"
-        >
-          Cancel
-        </button>
-      </div>
+
+      {toDelete && (
+        <ConfirmDialog
+          title="Remove this photo?"
+          message="The photo will be deleted and will no longer appear on the website. This can't be undone."
+          confirmLabel="Yes, remove photo"
+          onConfirm={handleDelete}
+          onCancel={() => setToDelete(null)}
+          busy={remove.isPending}
+          error={deleteError}
+        />
+      )}
     </div>
   );
 }

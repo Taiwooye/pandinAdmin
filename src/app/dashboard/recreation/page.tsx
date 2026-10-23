@@ -1,488 +1,388 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiClient } from "@/services/apiClient";
 import {
   useRecreationItemList,
   useCreateRecreationItem,
   useUpdateRecreationItem,
+  useReorderRecreationItems,
 } from "@/hooks/queries/useRecreationItem";
+import {
+  PageHeader,
+  Button,
+  Card,
+  Badge,
+  LoadingState,
+  ErrorState,
+  EmptyState,
+  Feedback,
+  errorMessage,
+  SidePanel,
+  ConfirmDialog,
+  Field,
+  TextInput,
+  TextArea,
+  TagInput,
+} from "@/components/ui";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types (match AdminRecreationResource) ────────────────────────────────────
 
-type RecreationItem = {
-  id: number | string;
-  slug?: string;
-  name?: string;
-  type?: string | { value: string; label: string };
-  description?: string;
-  status?: string | { value: string; label: string };
-  features?: string[];
-  sort_order?: number;
-  created_at?: string;
-};
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const TYPES = [
-  { value: "pool",         label: "Swimming Pool" },
-  { value: "basketball",   label: "Basketball" },
-  { value: "billiards",    label: "Billiards" },
-  { value: "table_tennis", label: "Table Tennis" },
-  { value: "gym",          label: "Gym" },
-];
-
-const STATUSES = [
-  { value: "available",   label: "Available",    class: "bg-green-50 text-green-600" },
-  { value: "coming_soon", label: "Coming Soon",  class: "bg-amber-50 text-amber-600" },
-  { value: "maintenance", label: "Maintenance",  class: "bg-red-50 text-red-500" },
-];
-
-const TYPE_ICONS: Record<string, string> = {
-  pool:         "🏊",
-  basketball:   "🏀",
-  billiards:    "🎱",
-  table_tennis: "🏓",
-  gym:          "🏋️",
-};
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function itemsFromResponse(raw: unknown): RecreationItem[] {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw as RecreationItem[];
-  const w = raw as { data?: unknown };
-  if (Array.isArray(w.data)) return w.data as RecreationItem[];
-  return [];
-}
-
-function itemId(r: RecreationItem): string { return String(r.id); }
-function itemName(r: RecreationItem): string { return r.name ?? "Untitled"; }
-function itemDescription(r: RecreationItem): string { return r.description ?? ""; }
-
-function itemTypeValue(r: RecreationItem): string {
-  if (!r.type) return "";
-  return typeof r.type === "object" ? r.type.value : r.type;
-}
-
-function itemTypeLabel(r: RecreationItem): string {
-  if (!r.type) return "";
-  if (typeof r.type === "object") return r.type.label;
-  return TYPES.find((t) => t.value === r.type)?.label ?? String(r.type);
-}
-
-function itemStatusValue(r: RecreationItem): string {
-  if (!r.status) return "available";
-  const raw = typeof r.status === "object" ? r.status.value : r.status;
-  // normalise API aliases
-  if (raw === "open" || raw === "active") return "available";
-  return raw;
-}
-
-function itemStatusMeta(r: RecreationItem) {
-  const val = itemStatusValue(r);
-  return STATUSES.find((s) => s.value === val) ?? STATUSES[0];
-}
-
-// ─── Form state ───────────────────────────────────────────────────────────────
-
-type FormState = {
+type Facility = {
+  id: number;
+  slug: string;
   name: string;
-  type: string;
+  type: { value: string; label: string };
   description: string;
-  status: string;
-  features: string[];
-  sort_order: string;
+  status: { value: string; label: string };
+  features: string[] | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
 };
 
-const EMPTY_FORM: FormState = {
-  name: "",
-  type: "pool",
-  description: "",
-  status: "available",
-  features: [],
-  sort_order: "0",
-};
+// ─── Plain-language labels (values = backend enums) ───────────────────────────
 
-function formFromItem(r: RecreationItem): FormState {
-  return {
-    name: itemName(r),
-    type: itemTypeValue(r) || "pool",
-    description: itemDescription(r),
-    status: itemStatusValue(r),
-    features: Array.isArray(r.features) ? [...r.features] : [],
-    sort_order: String(r.sort_order ?? 0),
-  };
+// RecreationFacilityType
+const TYPES = [
+  { value: "pool", label: "Swimming pool", icon: "🏊" },
+  { value: "basketball", label: "Basketball", icon: "🏀" },
+  { value: "billiards", label: "Billiards / snooker", icon: "🎱" },
+  { value: "table_tennis", label: "Table tennis", icon: "🏓" },
+  { value: "gym", label: "Gym", icon: "🏋️" },
+];
+
+// RecreationFacilityStatus
+const STATUSES: { value: string; label: string; hint: string; tone: "green" | "amber" | "red" }[] = [
+  { value: "available", label: "Open", hint: "Guests can use it now", tone: "green" },
+  { value: "coming_soon", label: "Coming soon", hint: "Not open yet", tone: "amber" },
+  { value: "maintenance", label: "Closed for maintenance", hint: "Temporarily closed", tone: "red" },
+];
+
+const typeInfo = (v: string) => TYPES.find((t) => t.value === v);
+const statusInfo = (v: string) => STATUSES.find((s) => s.value === v) ?? STATUSES[0];
+
+function itemsFromResponse(raw: unknown): Facility[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw as Facility[];
+  const w = raw as { data?: unknown };
+  return Array.isArray(w.data) ? (w.data as Facility[]) : [];
+}
+
+/** No delete hook exists in useRecreationItem, so call the backend's DELETE /recreation/{id} route here. */
+function useDeleteFacility() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data } = await apiClient.delete(`/api/v1/admin/recreation/${id}`);
+      return data;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["recreation"] }),
+  });
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function RecreationPage() {
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState<"add" | "edit">("add");
-  const [editingItem, setEditingItem] = useState<RecreationItem | null>(null);
+  const { data: raw, isLoading, isError } = useRecreationItemList();
+  const items = useMemo(
+    () => itemsFromResponse(raw).sort((a, b) => a.sort_order - b.sort_order || a.id - b.id),
+    [raw]
+  );
 
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [featureInput, setFeatureInput] = useState("");
-  const [formError, setFormError] = useState("");
+  const [panel, setPanel] = useState<{ mode: "add" } | { mode: "edit"; item: Facility } | null>(null);
+  const [deleting, setDeleting] = useState<Facility | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [notice, setNotice] = useState<{ success?: string; error?: string }>({});
 
-  const { data: raw, isLoading, isError, error } = useRecreationItemList();
-  const items: RecreationItem[] = itemsFromResponse(raw);
+  const deleteMutation = useDeleteFacility();
+  const reorderMutation = useReorderRecreationItems();
 
-  const createMutation = useCreateRecreationItem();
-  const updateMutation = useUpdateRecreationItem();
-  const isSaving = createMutation.isPending || updateMutation.isPending;
-
-  // ── Modal helpers ─────────────────────────────────────────────────────────
-
-  function openAdd() {
-    setForm(EMPTY_FORM);
-    setFeatureInput("");
-    setFormError("");
-    setModalMode("add");
-    setEditingItem(null);
-    setModalOpen(true);
+  function move(item: Facility, direction: -1 | 1) {
+    const idx = items.findIndex((f) => f.id === item.id);
+    const other = items[idx + direction];
+    if (!other) return;
+    const order = items.map((f) => (f.id === item.id ? other : f.id === other.id ? item : f));
+    const changes = order.map((f, i) => ({ id: f.id, sort_order: i })).filter((c) => items.find((f) => f.id === c.id)?.sort_order !== c.sort_order);
+    if (changes.length === 0) return;
+    setNotice({});
+    reorderMutation.mutate(changes, {
+      onSuccess: () => setNotice({ success: "Order saved. The website now lists the facilities in this order." }),
+      onError: (err) => setNotice({ error: errorMessage(err) }),
+    });
   }
 
-  function openEdit(item: RecreationItem) {
-    setForm(formFromItem(item));
-    setFeatureInput("");
-    setFormError("");
-    setModalMode("edit");
-    setEditingItem(item);
-    setModalOpen(true);
+  function confirmDelete() {
+    if (!deleting) return;
+    setDeleteError("");
+    const name = deleting.name;
+    deleteMutation.mutate(deleting.id, {
+      onSuccess: () => {
+        setDeleting(null);
+        setNotice({ success: `"${name}" was deleted and removed from the website.` });
+      },
+      onError: (err) => setDeleteError(errorMessage(err)),
+    });
   }
-
-  function closeModal() {
-    setModalOpen(false);
-    setFormError("");
-  }
-
-  function setField<K extends keyof FormState>(key: K, value: FormState[K]) {
-    setForm((prev) => ({ ...prev, [key]: value }));
-    setFormError("");
-  }
-
-  // ── Feature tag input ─────────────────────────────────────────────────────
-
-  function addFeature() {
-    const val = featureInput.trim();
-    if (!val || form.features.includes(val)) return;
-    setField("features", [...form.features, val]);
-    setFeatureInput("");
-  }
-
-  function removeFeature(f: string) {
-    setField("features", form.features.filter((x) => x !== f));
-  }
-
-  // ── Submit ────────────────────────────────────────────────────────────────
-
-  function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const name = form.name.trim();
-    if (!name) { setFormError("Name is required."); return; }
-    if (!form.type) { setFormError("Type is required."); return; }
-
-    const payload = {
-      name,
-      type: form.type,
-      description: form.description.trim(),
-      status: form.status,
-      features: form.features,
-      sort_order: parseInt(form.sort_order, 10) || 0,
-    };
-
-    if (modalMode === "add") {
-      createMutation.mutate(payload, {
-        onSuccess: closeModal,
-        onError: (err) => setFormError(err.message || "Failed to create facility."),
-      });
-    } else if (editingItem) {
-      updateMutation.mutate(
-        { id: itemId(editingItem), payload },
-        {
-          onSuccess: closeModal,
-          onError: (err) => setFormError(err.message || "Failed to update facility."),
-        }
-      );
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <div>
-      {/* Header */}
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">Recreation</h1>
-          <p className="text-slate-500 text-sm mt-1">
-            {isLoading ? "Loading…" : `${items.length} facilit${items.length !== 1 ? "ies" : "y"}`} · Manage leisure and recreational facilities.
-          </p>
-        </div>
-        <button
-          onClick={openAdd}
-          className="flex items-center gap-2 px-4 py-2 bg-[#5A0E24] text-white text-sm font-semibold rounded-xl hover:bg-[#4a0b1e] transition-colors"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-          Add Facility
-        </button>
-      </div>
+      <PageHeader
+        title="Recreation"
+        description="The pool, gym, courts and games shown on the website. Mark a facility as open, coming soon or closed, and list what it offers."
+        action={<Button onClick={() => setPanel({ mode: "add" })}>+ Add a facility</Button>}
+      />
 
-      {/* Loading */}
-      {isLoading && (
-        <div className="flex flex-col items-center gap-3 py-24 text-slate-400">
-          <svg className="w-6 h-6 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-          <span className="text-sm">Loading facilities…</span>
+      {(notice.success || notice.error) && (
+        <div className="mb-5 flex items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl px-4 py-3">
+          <Feedback success={notice.success} error={notice.error} />
+          <button onClick={() => setNotice({})} aria-label="Dismiss" className="text-slate-400 hover:text-slate-600">
+            ✕
+          </button>
         </div>
       )}
 
-      {/* Error */}
-      {isError && (
-        <div className="text-center py-16 space-y-1">
-          <p className="text-red-500 font-semibold text-sm">Failed to load recreation facilities.</p>
-          {error instanceof Error && <p className="text-xs text-slate-400 font-mono">{error.message}</p>}
-        </div>
-      )}
+      {isLoading && <LoadingState label="Loading facilities…" />}
+      {isError && <ErrorState message="Could not load the facilities. Check your internet connection and refresh the page." />}
 
-      {/* Empty */}
       {!isLoading && !isError && items.length === 0 && (
-        <div className="text-center py-24 text-slate-400">
-          <svg className="w-14 h-14 mx-auto mb-4 opacity-25" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
-          </svg>
-          <p className="font-semibold">No facilities yet.</p>
-          <p className="text-xs mt-1">Click &quot;Add Facility&quot; to create the first one.</p>
-        </div>
+        <EmptyState
+          icon="🏊"
+          title="No facilities yet"
+          description="Add your pool, gym or games room so guests can see them on the website."
+          action={<Button onClick={() => setPanel({ mode: "add" })}>+ Add a facility</Button>}
+        />
       )}
 
-      {/* Grid */}
       {!isLoading && !isError && items.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {items.map((item) => {
-            const typeVal = itemTypeValue(item);
-            const statusMeta = itemStatusMeta(item);
+          {items.map((item, i) => {
+            const t = typeInfo(item.type?.value);
+            const s = statusInfo(item.status?.value);
             const features = Array.isArray(item.features) ? item.features : [];
-
             return (
-              <div key={itemId(item)} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden flex flex-col">
-                {/* Card header */}
-                <div className="h-28 bg-gradient-to-br from-[#5A0E24]/5 to-[#5A0E24]/10 flex items-center justify-center">
-                  <span className="text-5xl">{TYPE_ICONS[typeVal] ?? "🎯"}</span>
+              <Card key={item.id} className="overflow-hidden flex flex-col">
+                <div className="h-24 bg-gradient-to-br from-[#5A0E24]/5 to-[#5A0E24]/15 flex items-center justify-center">
+                  <span className="text-5xl">{t?.icon ?? "🎯"}</span>
                 </div>
-
-                {/* Body */}
-                <div className="p-4 flex flex-col flex-1">
-                  <div className="flex items-start justify-between gap-2 mb-1">
-                    <h3 className="font-bold text-slate-800 text-base leading-snug">{itemName(item)}</h3>
-                    <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${statusMeta.class}`}>
-                      {statusMeta.label}
-                    </span>
+                <div className="p-5 flex flex-col flex-1">
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <h3 className="text-lg font-bold text-slate-800 leading-snug">{item.name}</h3>
+                    <Badge tone={s.tone}>{s.label}</Badge>
                   </div>
-
-                  <p className="text-xs text-slate-400 font-medium mb-2">{itemTypeLabel(item)}</p>
-
-                  {itemDescription(item) && (
-                    <p className="text-slate-500 text-sm leading-relaxed line-clamp-2 mb-3">
-                      {itemDescription(item)}
-                    </p>
-                  )}
-
+                  <p className="text-xs text-slate-400 font-medium mb-2">{t?.label ?? item.type?.label}</p>
+                  {item.description && <p className="text-sm text-slate-600 leading-relaxed line-clamp-3 mb-3">{item.description}</p>}
                   {features.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mb-3">
+                    <div className="flex flex-wrap gap-1.5 mb-3">
                       {features.map((f) => (
-                        <span key={f} className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{f}</span>
+                        <span key={f} className="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full">
+                          ✓ {f}
+                        </span>
                       ))}
                     </div>
                   )}
-
-                  <button
-                    onClick={() => openEdit(item)}
-                    className="mt-auto w-full py-2 text-sm font-semibold text-[#5A0E24] border border-[#5A0E24]/20 rounded-xl hover:bg-[#5A0E24]/5 transition-colors"
-                  >
-                    Edit
-                  </button>
+                  <div className="mt-auto space-y-2 pt-2">
+                    <div className="flex gap-2">
+                      <Button variant="secondary" className="flex-1" onClick={() => setPanel({ mode: "edit", item })}>
+                        ✏️ Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="text-red-600 hover:bg-red-50"
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleting(item);
+                        }}
+                      >
+                        🗑️ Delete
+                      </Button>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="flex-1 border border-slate-200"
+                        disabled={i === 0 || reorderMutation.isPending}
+                        onClick={() => move(item, -1)}
+                      >
+                        ← Show earlier
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="flex-1 border border-slate-200"
+                        disabled={i === items.length - 1 || reorderMutation.isPending}
+                        onClick={() => move(item, 1)}
+                      >
+                        Show later →
+                      </Button>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </Card>
             );
           })}
         </div>
       )}
 
-      {/* Modal */}
-      {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-              <h2 className="text-base font-bold text-slate-800">
-                {modalMode === "add" ? "Add Facility" : "Edit Facility"}
-              </h2>
-              <button onClick={closeModal} className="text-slate-400 hover:text-slate-600">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
+      {panel && (
+        <FacilityPanel
+          key={panel.mode === "edit" ? panel.item.id : "new"}
+          item={panel.mode === "edit" ? panel.item : null}
+          nextSortOrder={items.length ? Math.max(...items.map((f) => f.sort_order)) + 1 : 0}
+          onCreated={(name) => {
+            setPanel(null);
+            setNotice({ success: `"${name}" was added. It now shows on the website.` });
+          }}
+          onClose={() => setPanel(null)}
+        />
+      )}
 
-            {/* Form */}
-            <form onSubmit={onSubmit} noValidate className="px-6 py-5 space-y-4">
-
-              {/* Name */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                  Facility Name <span className="text-red-500">*</span>
-                </label>
-                <input
-                  value={form.name}
-                  onChange={(e) => setField("name", e.target.value)}
-                  placeholder="e.g. Olympic Swimming Pool"
-                  className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#5A0E24]/20 focus:border-[#5A0E24]"
-                />
-              </div>
-
-              {/* Type */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                  Type <span className="text-red-500">*</span>
-                </label>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {TYPES.map((t) => (
-                    <button
-                      key={t.value}
-                      type="button"
-                      onClick={() => setField("type", t.value)}
-                      className={`flex items-center gap-2 px-3 py-2 rounded-xl border-2 text-sm font-medium transition-all ${
-                        form.type === t.value
-                          ? "border-[#5A0E24] bg-[#5A0E24]/5 text-[#5A0E24]"
-                          : "border-slate-100 text-slate-600 hover:border-slate-200"
-                      }`}
-                    >
-                      <span>{TYPE_ICONS[t.value]}</span>
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Status */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                  Status <span className="text-red-500">*</span>
-                </label>
-                <div className="flex gap-2">
-                  {STATUSES.map((s) => (
-                    <button
-                      key={s.value}
-                      type="button"
-                      onClick={() => setField("status", s.value)}
-                      className={`flex-1 py-2 rounded-xl border-2 text-xs font-semibold transition-all ${
-                        form.status === s.value
-                          ? `border-current ${s.class}`
-                          : "border-slate-100 text-slate-500 hover:border-slate-200"
-                      }`}
-                    >
-                      {s.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Description</label>
-                <textarea
-                  value={form.description}
-                  onChange={(e) => setField("description", e.target.value)}
-                  rows={3}
-                  placeholder="Describe this facility…"
-                  className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#5A0E24]/20 focus:border-[#5A0E24] resize-none"
-                />
-              </div>
-
-              {/* Features */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Features</label>
-                <div className="flex gap-2">
-                  <input
-                    value={featureInput}
-                    onChange={(e) => setFeatureInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addFeature(); } }}
-                    placeholder="e.g. Heated Water, Lifeguard on Duty"
-                    className="flex-1 px-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#5A0E24]/20 focus:border-[#5A0E24]"
-                  />
-                  <button
-                    type="button"
-                    onClick={addFeature}
-                    disabled={!featureInput.trim()}
-                    className="px-4 py-2.5 text-sm font-semibold bg-slate-100 text-slate-700 rounded-xl hover:bg-slate-200 disabled:opacity-40 transition-colors"
-                  >
-                    Add
-                  </button>
-                </div>
-                {form.features.length > 0 && (
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {form.features.map((f) => (
-                      <span key={f} className="flex items-center gap-1.5 bg-slate-100 text-slate-700 text-xs font-medium px-2.5 py-1 rounded-full">
-                        {f}
-                        <button
-                          type="button"
-                          onClick={() => removeFeature(f)}
-                          className="text-slate-400 hover:text-red-500 transition-colors"
-                        >
-                          <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Sort order */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1.5">Sort Order</label>
-                <input
-                  type="number"
-                  min={0}
-                  value={form.sort_order}
-                  onChange={(e) => setField("sort_order", e.target.value)}
-                  className="w-24 px-3 py-2.5 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#5A0E24]/20 focus:border-[#5A0E24]"
-                />
-              </div>
-
-              {/* Error */}
-              {formError && (
-                <p className="text-xs text-red-500 font-medium">{formError}</p>
-              )}
-
-              {/* Actions */}
-              <div className="flex gap-3 pt-1">
-                <button
-                  type="button"
-                  onClick={closeModal}
-                  className="flex-1 py-2.5 text-sm font-semibold text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="flex-1 py-2.5 text-sm font-semibold text-white bg-[#5A0E24] rounded-xl hover:bg-[#4a0b1e] disabled:opacity-50 transition-colors"
-                >
-                  {isSaving ? "Saving…" : modalMode === "add" ? "Add Facility" : "Save Changes"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete "${deleting.name}"?`}
+          message="It will be removed from the website for good. If it is only closed for a while, edit it and choose “Closed for maintenance” instead."
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleting(null)}
+          busy={deleteMutation.isPending}
+          error={deleteError}
+        />
       )}
     </div>
+  );
+}
+
+// ─── Add / edit panel ─────────────────────────────────────────────────────────
+
+function FacilityPanel({
+  item,
+  nextSortOrder,
+  onCreated,
+  onClose,
+}: {
+  item: Facility | null;
+  nextSortOrder: number;
+  onCreated: (name: string) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(item?.name ?? "");
+  const [type, setType] = useState(item?.type?.value ?? "pool");
+  const [status, setStatus] = useState(item?.status?.value ?? "available");
+  const [description, setDescription] = useState(item?.description ?? "");
+  const [features, setFeatures] = useState<string[]>(Array.isArray(item?.features) ? [...item.features] : []);
+  const [feedback, setFeedback] = useState<{ success?: string; error?: string }>({});
+
+  const createMutation = useCreateRecreationItem();
+  const updateMutation = useUpdateRecreationItem();
+  const saving = createMutation.isPending || updateMutation.isPending;
+
+  function save() {
+    if (!name.trim()) return setFeedback({ error: "Please enter a name, e.g. “Swimming pool”." });
+    // Backend requires a non-empty description (empty text is rejected)
+    if (!description.trim()) return setFeedback({ error: "Please write a short description for the website." });
+    setFeedback({});
+
+    const base = { name: name.trim(), type, description: description.trim(), status, features };
+    if (!item) {
+      createMutation.mutate(
+        { ...base, sort_order: nextSortOrder },
+        {
+          onSuccess: () => onCreated(base.name),
+          onError: (err) => setFeedback({ error: errorMessage(err) }),
+        }
+      );
+    } else {
+      updateMutation.mutate(
+        { id: String(item.id), payload: base },
+        {
+          onSuccess: () => setFeedback({ success: "Changes saved. The website is updated." }),
+          onError: (err) => setFeedback({ error: errorMessage(err) }),
+        }
+      );
+    }
+  }
+
+  return (
+    <SidePanel
+      title={item ? `Edit ${item.name}` : "Add a facility"}
+      subtitle="Everything here is shown to guests on the website."
+      onClose={onClose}
+      footer={
+        <div className="space-y-3">
+          <Feedback success={feedback.success} error={feedback.error} />
+          <div className="flex gap-2">
+            <Button onClick={save} disabled={saving} className="flex-1">
+              {saving ? "Saving…" : item ? "Save changes" : "Add facility"}
+            </Button>
+            <Button variant="secondary" onClick={onClose}>
+              {item ? "Close" : "Cancel"}
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div className="space-y-5">
+        <Field label="Name" hint="As guests will see it" required>
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Outdoor swimming pool" />
+        </Field>
+
+        <div>
+          <p className="text-sm font-semibold text-slate-700">
+            What kind of facility is it? <span className="text-red-500">*</span>
+          </p>
+          <div className="grid grid-cols-2 gap-2 mt-1.5">
+            {TYPES.map((t) => (
+              <button
+                key={t.value}
+                type="button"
+                onClick={() => setType(t.value)}
+                className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border-2 text-sm font-medium transition-all ${
+                  type === t.value ? "border-[#5A0E24] bg-[#5A0E24]/5 text-[#5A0E24]" : "border-slate-200 text-slate-600 hover:border-slate-300"
+                }`}
+              >
+                <span className="text-lg">{t.icon}</span>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm font-semibold text-slate-700">Is it open right now?</p>
+          <div className="space-y-2 mt-1.5">
+            {STATUSES.map((s) => (
+              <button
+                key={s.value}
+                type="button"
+                onClick={() => setStatus(s.value)}
+                className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border-2 text-left transition-all ${
+                  status === s.value ? "border-[#5A0E24] bg-[#5A0E24]/5" : "border-slate-200 hover:border-slate-300"
+                }`}
+              >
+                <span>
+                  <span className="block text-sm font-semibold text-slate-800">{s.label}</span>
+                  <span className="block text-xs text-slate-500">{s.hint}</span>
+                </span>
+                {status === s.value && <span className="text-[#5A0E24] font-bold">✓</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <Field label="Description" hint="One or two sentences for the website" required>
+          <TextArea
+            rows={4}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="e.g. A heated outdoor pool with sun loungers, open daily from 7am to 8pm."
+          />
+        </Field>
+
+        <Field label="Features" hint="Type one feature and press Enter, e.g. “Lifeguard on duty”">
+          <TagInput value={features} onChange={setFeatures} placeholder="Type a feature and press Enter" />
+        </Field>
+      </div>
+    </SidePanel>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import * as authApi from "@/services/endpoints/auth";
 import { TOKEN_KEY } from "@/services/apiClient";
@@ -14,11 +14,15 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+const subscribeNoop = () => () => {};
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(() =>
     typeof window !== "undefined" ? !!localStorage.getItem(TOKEN_KEY) : false
   );
-  const [initialized] = useState(() => typeof window !== "undefined");
+  // False on the server and during hydration, true afterwards — so the first
+  // client render matches the server HTML and auth-gated content appears after.
+  const initialized = useSyncExternalStore(subscribeNoop, () => true, () => false);
   const router = useRouter();
 
   async function login(email: string, password: string) {
